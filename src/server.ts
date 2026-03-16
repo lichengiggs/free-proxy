@@ -8,7 +8,7 @@ import { fetchModels, filterFreeModels } from './models';
 
 const app = new Hono();
 
-// CORS 配置（允许所有本地端口）
+// CORS 配置
 app.use('/*', cors({
   origin: (origin) => {
     if (origin.startsWith('http://localhost:') || origin === 'null') {
@@ -18,13 +18,13 @@ app.use('/*', cors({
   }
 }));
 
-// 静态文件服务（Web管理界面）
+// 静态文件服务
 app.use('/*', serveStatic({
   root: './public',
   index: 'index.html'
 }));
 
-// 转发请求到OpenRouter
+// 转发请求
 async function proxyRequest(
   path: string,
   method: string,
@@ -71,20 +71,23 @@ app.post('/v1/chat/completions', async (c) => {
       headers
     );
 
-    // 流式响应处理
+    // 流式响应
     if (body.stream) {
+      const responseHeaders = Object.fromEntries(response.headers.entries());
+      c.status(response.status as any);
+      Object.entries(responseHeaders).forEach(([key, value]) => {
+        c.header(key, value);
+      });
       return stream(c, async (stream) => {
         if (!response.body) return;
         const reader = response.body.getReader();
-        while (true) {
-          const { done, value } = await reader.read();
-          if (done) break;
-          await stream.write(value);
+        let done = false;
+        while (!done) {
+          const chunk = await reader.read();
+          done = chunk.done;
+          if (!done && chunk.value) await stream.write(chunk.value);
         }
-      }, {
-        status: response.status,
-        headers: Object.fromEntries(response.headers.entries())
-      } as any);
+      });
     }
 
     // 非流式响应

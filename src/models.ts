@@ -13,7 +13,7 @@ interface OpenRouterModel {
 
 let cachedModels: OpenRouterModel[] = [];
 let lastFetchTime = 0;
-const CACHE_TTL = 60 * 60 * 1000; // 1小时缓存
+const CACHE_TTL = 60 * 60 * 1000;
 
 export async function fetchModels(forceRefresh = false): Promise<OpenRouterModel[]> {
   const now = Date.now();

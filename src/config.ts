@@ -41,4 +41,4 @@ export const ENV = {
   OPENROUTER_API_KEY: process.env.OPENROUTER_API_KEY || '',
   OPENROUTER_BASE_URL: process.env.OPENROUTER_BASE_URL || 'https://openrouter.ai/api/v1',
   PORT: Number(process.env.PORT) || 8765
-} as const;
+};
