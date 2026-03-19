@@ -56,10 +56,38 @@ curl -X POST http://localhost:8765/v1/chat/completions \
   -d '{"model":"auto","messages":[{"role":"user","content":"hi"}]}'
 ```
 
-### 5. 发布 checklist
+### 5. 安全检查（推送 GitHub 前必做）
 
-- [ ] 删除 `.env`, `config.json`, `rate-limit-state.json`
-- [ ] 检查 `git log` 中无 API key
+```bash
+# 1. 清理本地敏感文件
+rm -f .env config.env config.json rate-limit-state.json
+
+# 2. 检查待提交文件
+git status
+
+# 3. 扫描历史记录中的 API key
+git log --all -p | grep -E "sk-or-[a-zA-Z0-9]{40,}"
+
+# 4. 检查源代码中是否硬编码了 key
+grep -r "sk-or-" src/ __tests__/ public/ --include="*.ts" --include="*.html" --include="*.js"
+
+# 5. 确认 .gitignore 包含敏感文件
+cat .gitignore | grep -E "\.env|config\.json"
+
+# 6. 使用 trufflehog 深度扫描（可选）
+trufflehog git file://. --only-verified 2>/dev/null || echo "trufflehog 未安装"
+```
+
+**如果发现问题：**
+- 立即停止推送
+- 删除包含敏感信息的提交（`git rebase -i` 或 `git filter-repo`）
+- 在 OpenRouter 删除泄露的 key 并重新生成
+
+### 6. 发布 checklist
+
+- [ ] 运行安全检查（第 5 节所有步骤）
 - [ ] 更新 README.md
 - [ ] 运行 `npm test`（确保不报错）
 - [ ] 运行 `npx tsc --noEmit`（类型检查通过）
+- [ ] 清理中间文档（plan.md, research.md 等）
+- [ ] 推送前最后确认：`git diff --stat`
