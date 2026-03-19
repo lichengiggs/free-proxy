@@ -1,714 +1,1018 @@
-# OpenRouter Free Proxy 功能增强实施计划
+# 实现计划
 
-## 目标
+## 当前阶段要完成的功能
 
-让用户使用免费模型时**尽可能无感**，最大化利用免费 API 的能力，避免频繁手工切换模型。
+### 1. API Key 配置界面
+- Web 界面输入和验证 API Key
+- API Key 有效性验证（调用 OpenRouter API）
+- 已配置状态的显示和修改
 
-## 核心原则
+### 2. 模型列表显示
+- 显示验证过的可用模型
+- 只展示候选池内的模型（通过二次验证）
 
-- **简单优先**：用最少的代码实现核心功能
-- **渐进增强**：先跑起来，再优化
-- **专注个人使用**：不需要过度考虑兼容性，保持代码简洁无负担
+### 3. 候选池动态验证
+- 启动时验证模型可用性
+- 用户手工刷新模型列表
+- Web 界面显示验证进度和上次更新时间
+
+### 4. OpenClaw 配置检测
+- 自动检测 OpenClaw 配置文件
+- 显示配置文件状态
+
+### 5. 一键配置到 OpenClaw
+- 点击按钮自动配置
+- 规则匹配修改配置文件
+- 自动创建备份
+
+### 6. 配置恢复功能
+- 显示备份列表
+- 一键恢复配置
+
+### 7. 改进的降级策略
+- 尝试所有候选池模型（不限制数量）
+- 记录失败模型，下次跳过
+- 最后尝试 openrouter/free 兜底
 
 ---
 
-## Phase 1: 增强免费模型检测（1-2小时）
+## 总览
 
-### 1.1 当前问题
-仅检测 `:free` 后缀，可能漏掉一些 pricing=0 的免费模型
+将 7 步使用流程简化为 3 步，通过 Web 界面配置和一键配置功能降低使用门槛。
 
-### 1.2 改进方案
-双重检测：`:free` 后缀 + pricing=0
+**核心目标**：
+- 用户不需要理解 base_url、localhost 等技术概念
+- 用户不需要手动编辑配置文件
+- 配置过程可视化、可验证
 
-### 1.3 代码实现
+---
 
+## 功能模块
+
+### 模块 1：API Key 配置界面
+
+**目标**：让用户通过 Web 界面配置 API Key，并验证有效性
+
+#### 1.1 前端界面
+
+**文件**：`public/index.html`（新建或修改现有）
+
+**界面元素**：
+```
+┌─────────────────────────────────────────┐
+│  OpenRouter Free Proxy                  │
+├─────────────────────────────────────────┤
+│                                         │
+│  OpenRouter API Key:                    │
+│  ┌─────────────────────────────────────┐│
+│  │ ●●●●●●●●●●●●●●●●        [获取 Key]  ││
+│  └─────────────────────────────────────┘│
+│           [保存并验证]                   │
+│                                         │
+│  状态: 未配置                            │
+└─────────────────────────────────────────┘
+```
+
+**交互逻辑**：
+1. 输入框类型为 `password`，打码显示
+2. "获取 Key" 链接到 `https://openrouter.ai/keys`
+3. "保存并验证" 按钮：
+   - 点击后调用验证接口
+   - 显示验证进度（"验证中..."）
+   - 成功：显示 "✓ 验证成功" + 进入模块 2
+   - 失败：显示具体错误信息（"API Key 无效" / "网络错误"）
+4. 如果用户已配置 API Key：
+   - 显示当前配置状态："已配置 (sk-****abc)"
+   - 提供"修改"按钮，点击后清空输入框，允许重新输入新 Key
+
+**状态显示**：
+- 未配置：显示 "状态: 未配置"
+- 已配置：显示 "状态: 已配置 (sk-****abc)"，其中 abc 显示后三位 + "修改" 按钮
+- 验证中：显示 "状态: 验证中..."
+- 验证失败：显示 "状态: 验证失败 - 具体原因"
+
+#### 1.2 后端验证接口
+
+**文件**：`src/server.ts`
+
+**新增路由**：`POST /api/validate-key`
+
+**验证逻辑**：
 ```typescript
-// src/models.ts
-export interface OpenRouterModel {
+// 伪代码
+POST /api/validate-key
+  Request: { apiKey: string }
+  
+  1. 调用 OpenRouter API 测试 Key
+     GET https://openrouter.ai/api/v1/models
+     Headers: Authorization: Bearer <apiKey>
+  
+  2. 判断响应
+     - 200 OK: Key 有效
+     - 401 Unauthorized: Key 无效
+     - 其他: 网络错误或服务器错误
+  
+  3. 成功后保存到 .env 文件
+     创建或追加: OPENROUTER_API_KEY=<apiKey>
+  
+  Response: 
+    { success: true, message: "验证成功" }
+    { success: false, error: "错误原因" }
+```
+
+**错误处理**：
+- API Key 格式错误（不以 sk- 开头）：返回 "格式错误"
+- API Key 无效（401）：返回 "API Key 无效，请检查"
+- 网络错误：返回 "网络错误，请稍后重试"
+- 服务器错误：返回 "服务器错误，请稍后重试"
+
+**安全考虑**：
+- API Key 不记录在日志中
+- .env 文件权限设置为 600（仅所有者可读写）
+
+#### 1.3 配置文件管理
+
+**文件**：`src/config.ts`
+
+**新增功能**：
+- `saveApiKey(key: string)`：保存 API Key 到 .env
+- `getApiKeyStatus()`：获取当前 API Key 状态（已配置/未配置）
+- `maskApiKey(key: string)`：打码显示（sk-****abc）
+
+---
+
+### 模块 2：模型列表界面
+
+**目标**：显示可用模型列表，提示用户可以在 OpenClaw 中使用
+
+#### 2.1 前端界面
+
+**在同一页面显示**：
+
+```
+┌─────────────────────────────────────────┐
+│  OpenRouter Free Proxy                  │
+├─────────────────────────────────────────┤
+│  可用模型                               │
+│  ┌─────────────────────────────────────┐│
+│  │ • auto (智能降级)                    ││
+│  │ • deepseek/deepseek-chat (推荐)     ││
+│  │ • openai/gpt-4-turbo                ││
+│  │ • ...                               ││
+│  └─────────────────────────────────────┘│
+│                                         │
+│  在 OpenClaw 中使用:                    │
+│  /model free_proxy/auto                │
+└─────────────────────────────────────────┘
+```
+
+**数据来源**：
+- 从现有 `/models` 接口获取
+- 显示模型 ID 和说明（如 "智能降级"、"推荐"）
+
+#### 2.2 后端数据接口
+
+**文件**：`src/server.ts`
+
+**现有接口**：`GET /models`（已实现）
+
+**返回格式**：
+```json
+{
+  "models": [
+    { "id": "auto", "name": "auto", "description": "智能降级" },
+    { "id": "deepseek/deepseek-chat", "name": "DeepSeek Chat", "description": "推荐" }
+  ]
+}
+```
+
+---
+
+### 模块 3：一键配置到 OpenClaw
+
+**目标**：自动检测并配置 OpenClaw，用户只需点击按钮
+
+#### 3.1 配置文件检测
+
+**文件**：`src/openclaw-config.ts`（新建）
+
+**检测逻辑**：
+```typescript
+// 伪代码
+function detectOpenClawConfig(): {
+  exists: boolean,
+  path: string,
+  isValid: boolean,
+  content?: object
+}
+
+const configPath = path.join(os.homedir(), '.openclaw', 'openclaw.json')
+
+1. 检查文件是否存在
+   - 存在：读取内容
+   - 不存在：返回 { exists: false, path: configPath }
+
+2. 检查文件是否是有效 JSON
+   - 有效：解析并返回
+   - 无效：返回 { exists: true, isValid: false }
+
+3. 返回配置对象
+```
+
+#### 3.2 配置文件合并
+
+**文件**：`src/openclaw-config.ts`
+
+**合并逻辑**：
+```typescript
+// 伪代码
+function mergeConfig(currentConfig: object): {
+  newConfig: object,
+  backup: string
+}
+
+1. 创建备份
+   - 读取当前配置文件
+   - 创建备份文件：openclaw.json.backup.20260319.143022
+   - 返回备份文件名
+
+2. 合并配置
+   - 确保路径存在：
+     models.providers.free_proxy
+     agents.defaults.models
+   
+   - 添加 provider：
+     currentConfig.models.providers.free_proxy = {
+       baseUrl: "http://localhost:8765/v1",
+       apiKey: "any_string",
+       api: "openai-completions",
+       models: [{ id: "auto", name: "auto" }]
+     }
+   
+   - 添加 model：
+     currentConfig.agents.defaults.models["free_proxy/auto"] = {}
+   
+   - 不修改：
+     agents.defaults.model.primary
+     agents.list[].model
+
+3. 返回新配置
+```
+
+**边界情况处理**：
+- 文件不存在：创建最小配置结构
+- 文件存在但不是有效 JSON：报错并让用户手动处理
+- 某些路径不存在（models/providers）：自动创建
+- 已存在 free_proxy provider：覆盖（提醒用户）
+- **安全要求**：只有验证过有效的 OpenRouter API Key 后，才能执行配置修改
+
+**配置修改方案**：规则匹配修改
+- 根据预定义规则直接修改配置文件
+- 实现简单，可控性强
+- 通过字段验证确保修改正确
+
+#### 3.3 前端界面
+
+**按钮位置**：
+
+```
+┌─────────────────────────────────────────┐
+│  OpenRouter Free Proxy                  │
+├─────────────────────────────────────────┤
+│  OpenClaw 配置                          │
+│                                         │
+│  状态: ✓ 已检测到 OpenClaw              │
+│  配置文件: ~/.openclaw/openclaw.json    │
+│                                         │
+│  [一键配置到 OpenClaw]                  │
+│                                         │
+│  备份管理:                              │
+│  • openclaw.json.backup.20260319.143022 │
+│  [恢复上一个配置]                       │
+└─────────────────────────────────────────┘
+```
+
+**交互逻辑**：
+1. 页面加载时检测 OpenClaw 配置文件
+2. 检测到：显示配置状态 + "一键配置" 按钮
+3. 未检测到：显示 "未检测到 OpenClaw 配置文件"
+4. 点击按钮：
+   - 显示 "正在配置..."
+   - 创建备份
+   - 合并配置
+   - 写入文件
+   - 显示 "✓ 配置成功"
+   - 显示备份文件名
+
+#### 3.4 后端接口
+
+**文件**：`src/server.ts`
+
+**新增路由**：`POST /api/configure-openclaw`
+
+**请求**：无参数（从当前配置获取）
+
+**响应**：
+```json
+{
+  "success": true,
+  "backup": "openclaw.json.backup.20260319.143022",
+  "message": "配置成功"
+}
+```
+
+**错误响应**：
+```json
+{
+  "success": false,
+  "error": "配置文件格式错误",
+  "backup": null
+}
+```
+
+---
+
+### 模块 4：配置恢复功能
+
+**目标**：当配置出问题时，用户可以恢复到上一个版本
+
+#### 4.1 备份文件列表
+
+**文件**：`src/openclaw-config.ts`
+
+**功能**：
+```typescript
+// 伪代码
+function listBackups(): string[]
+
+1. 扫描 ~/.openclaw/ 目录
+2. 匹配 openclaw.json.backup.* 文件
+3. 按时间排序（新到旧）
+4. 返回文件名列表
+```
+
+#### 4.2 恢复接口
+
+**文件**：`src/server.ts`
+
+**路由**：`POST /api/restore-backup`
+
+**请求**：
+```json
+{
+  "backup": "openclaw.json.backup.20260319.143022"
+}
+```
+
+**逻辑**：
+```typescript
+1. 验证备份文件存在
+2. 验证备份文件是有效 JSON
+3. 复制备份文件到 openclaw.json
+4. 返回成功
+```
+
+#### 4.3 前端界面
+
+**元素**：
+- 显示最近的备份文件：`openclaw.json.backup.20260319.143022`
+- "恢复上一个配置" 按钮
+- 点击后恢复并显示 "✓ 已恢复"
+
+---
+
+## 文件结构
+
+### 新建文件
+
+```
+src/
+├── openclaw-config.ts    # OpenClaw 配置管理
+│   ├── detectOpenClawConfig()
+│   ├── mergeConfig()
+│   ├── listBackups()
+│   └── restoreBackup()
+│
+public/
+└── index.html            # Web 界面（新建或修改现有）
+    ├── API Key 输入区域
+    ├── 模型列表区域
+    ├── OpenClaw 配置区域
+    └── 备份管理区域
+```
+
+### 修改文件
+
+```
+src/
+├── server.ts             # 添加路由
+│   ├── POST /api/validate-key
+│   ├── POST /api/configure-openclaw
+│   └── POST /api/restore-backup
+│
+├── config.ts             # 添加功能
+│   ├── saveApiKey()
+│   ├── getApiKeyStatus()
+│   └── maskApiKey()
+```
+
+---
+
+## 实现顺序
+
+### 阶段 1：API Key 配置（基础功能）
+
+**目标**：用户可以通过 Web 配置 API Key
+
+**步骤**：
+1. 实现 `config.ts` 的 API Key 管理功能
+2. 实现 `server.ts` 的 `/api/validate-key` 接口
+3. 实现前端界面（API Key 输入 + 验证）
+4. 测试：输入正确/错误的 Key，验证是否正确保存
+
+**交付物**：
+- 用户可以输入 API Key
+- Key 会被验证
+- 验证成功后保存到 .env
+- 界面显示验证状态
+
+### 阶段 2：模型列表显示
+
+**目标**：用户可以看到可用模型
+
+**步骤**：
+1. 创建推荐模型列表 `src/recommended-models.ts`
+2. 修改 `GET /models` 接口，只返回推荐模型 + 添加 description 字段
+3. 实现前端模型列表显示
+4. 测试：验证模型列表正确显示
+
+**交付物**：
+- 用户可以看到推荐模型
+- 每个模型有简单说明
+
+### 阶段 X：模型可用性优化
+
+**目标**：提供可靠的模型选择、智能的降级策略和动态验证机制
+
+**步骤**：
+1. 创建候选池管理模块 `src/candidate-pool.ts`
+   - 实现模型可用性验证逻辑
+   - 实现候选池更新和缓存机制
+   - 实现失败模型记录功能
+2. 修改 `GET /models` 接口
+   - 返回候选池内的模型（只返回验证过的模型）
+   - 添加 description 字段
+3. 修改降级逻辑 `src/fallback.ts`
+   - 从候选池获取所有模型（不限制数量）
+   - 尝试所有候选模型
+   - 记录失败模型
+   - 最后尝试 `openrouter/free` 兜底
+4. 实现 Web 界面模型刷新功能
+   - "刷新模型列表"按钮
+   - 显示"上次更新时间"
+   - 显示验证进度
+5. 测试：模拟不可用模型场景，验证降级策略
+
+**交付物**：
+- 候选池管理模块（验证、缓存、更新）
+- Web 界面只显示验证过的模型
+- 尝试所有候选模型的降级策略
+- 失败模型记录功能
+
+### 阶段 3：OpenClaw 配置检测
+
+**目标**：自动检测 OpenClaw 配置文件
+
+**步骤**：
+1. 实现 `openclaw-config.ts` 的检测功能
+2. 实现 `server.ts` 的 `/api/detect-openclaw` 接口
+3. 实现前端检测状态显示
+4. 测试：有/无配置文件时的表现
+
+**交付物**：
+- 自动检测 OpenClaw 配置
+- 显示检测状态
+
+### 阶段 4：一键配置
+
+**目标**：用户点击按钮完成配置
+
+**步骤**：
+1. 实现 `openclaw-config.ts` 的合并功能
+2. 实现 `server.ts` 的 `/api/configure-openclaw` 接口
+3. 实现前端一键配置按钮
+4. 测试：各种边界情况
+
+**交付物**：
+- 用户可以一键配置
+- 配置文件正确更新
+- 自动创建备份
+
+### 阶段 5：配置恢复
+
+**目标**：用户可以恢复配置
+
+**步骤**：
+1. 实现 `openclaw-config.ts` 的备份管理功能
+2. 实现 `server.ts` 的 `/api/restore-backup` 接口
+3. 实现前端备份管理和恢复功能
+4. 测试：恢复操作
+
+**交付物**：
+- 用户可以查看备份列表
+- 用户可以恢复配置
+
+---
+
+## 测试验证
+
+### 单元测试
+
+**文件**：`tests/` 目录
+
+**测试用例**：
+1. API Key 验证
+   - 有效 Key
+   - 无效 Key
+   - 格式错误
+   - 网络错误
+
+2. OpenClaw 配置检测
+   - 文件存在且有效
+   - 文件不存在
+   - 文件存在但无效
+
+3. 配置合并
+   - 正常合并
+   - 文件不存在创建
+   - 路径不存在创建
+   - 已存在 provider 覆盖
+
+### 集成测试
+
+**场景**：
+1. 完整流程：输入 Key → 验证 → 显示模型 → 配置 OpenClaw
+2. 边界场景：
+   - OpenClaw 未安装
+   - 配置文件损坏
+   - 已配置过 free_proxy
+
+### 手动测试
+
+**步骤**：
+1. 启动代理服务：`npm start`
+2. 打开浏览器：`http://localhost:8765`
+3. 输入 OpenRouter API Key
+4. 验证状态显示
+5. 查看模型列表
+6. 点击"一键配置到 OpenClaw"
+7. 打开 OpenClaw，执行 `/model free_proxy/auto`
+8. 发送消息测试
+
+---
+
+## 注意事项
+
+### 安全考虑
+
+1. **API Key 保护**
+   - 密码框输入
+   - 不记录到日志
+   - .env 文件权限 600
+
+2. **配置文件备份**
+   - 备份文件也包含敏感信息
+   - 不暴露到 Web 界面
+   - 仅显示文件名
+
+3. **输入验证**
+   - API Key 格式验证
+   - 文件路径验证（防止路径注入）
+
+### 错误处理
+
+1. **网络错误**
+   - 提示用户重试
+   - 显示具体错误信息
+
+2. **文件错误**
+   - 配置文件损坏：提示用户手动修复
+   - 写入失败：提示权限问题
+
+3. **边界情况**
+   - OpenClaw 未安装：显示安装指引链接
+   - 配置文件已存在 free_proxy：提醒用户确认覆盖
+
+### 兼容性
+
+1. **Node.js 版本**：确保代码兼容 Node.js 14+
+2. **操作系统**：测试 macOS、Linux、Windows
+3. **OpenClaw 版本**：确认配置格式兼容性
+
+---
+
+## 实际问题讨论
+
+### 问题 1：很多 Free 模型实际不可用
+
+**现象**：OpenRouter 列出的 free 模型很多，但实际可用的不多。列出很多不可用的模型，用户尝试后会感觉工具是坏的。
+
+**解决方案**：
+
+**方案 A：动态验证模型池（推荐且必要）**
+
+1. **模型二次验证流程**：
+   - OpenRouter 返回 free 模型列表
+   - 对每个模型进行可用性验证（测试调用）
+   - 验证通过的模型进入候选池
+   - 只展示和使用候选池内的模型
+
+2. **候选池更新机制**：
+   - **启动时验证**：npm start 时自动验证一次
+   - **用户手工刷新**：Web 界面提供"刷新模型列表"按钮
+   ```typescript
+   // src/candidate-pool.ts
+   const CANDIDATE_POOL: Map<string, ModelInfo> = new Map();
+   
+   async function refreshCandidatePool() {
+     const freeModels = await fetchFreeModels();
+     for (const model of freeModels) {
+       const isValid = await validateModel(model.id);
+       if (isValid) {
+         CANDIDATE_POOL.set(model.id, model);
+       }
+     }
+   }
+   ```
+
+3. **Web 界面交互**：
+   - 显示"上次更新时间：2026-03-19 14:30"
+   - 提供"刷新模型列表"按钮
+   - 刷新时显示进度："正在验证模型可用性... (3/10)"
+
+4. **降级策略**：
+   - 在候选池内的模型中进行降级
+   - 尝试所有候选模型后才提示用户无可用模型
+
+**优点**：
+- 动态更新，无需人工维护列表
+- 确保列出的模型都是可用的
+- 用户可控制更新频率
+
+**缺点**：
+- 启动时需要验证时间（可在后台异步进行）
+- 验证可能增加 OpenRouter API 调用次数
+
+**独立数据模块**：`src/candidate-pool.ts`
+```typescript
+// src/candidate-pool.ts
+export interface CandidateModel {
   id: string;
   name: string;
-  description: string;
-  context_length: number;
-  pricing: {
-    prompt: string;
-    completion: string;
-  };
+  lastValidated: Date;
+  successRate: number;
 }
 
-export function filterFreeModels(models: OpenRouterModel[]): OpenRouterModel[] {
-  return models.filter(model => {
-    // 方法1: :free 后缀
-    if (model.id.endsWith(':free')) return true;
-    
-    // 方法2: pricing 为 0（更可靠）
-    const promptCost = parseFloat(model.pricing?.prompt || '0');
-    const completionCost = parseFloat(model.pricing?.completion || '0');
-    if (promptCost === 0 && completionCost === 0) return true;
-    
-    return false;
-  });
+export class CandidatePool {
+  private models: Map<string, CandidateModel> = new Map();
+  private lastUpdateTime: number = 0;
+  
+  // 验证模型可用性
+  async validateModel(modelId: string): Promise<boolean>;
+  
+  // 刷新候选池
+  async refresh(force?: boolean): Promise<void>;
+  
+  // 获取候选模型列表
+  getCandidates(): CandidateModel[];
+  
+  // 标记模型失败
+  markModelFailed(modelId: string): void;
 }
 ```
 
-### 1.4 验证方式
-```bash
-curl http://localhost:8765/admin/models | jq '.models | length'
-```
+### 问题 2：降级策略可能导致过早 fallback
 
----
+**现象**：当前降级策略只尝试前 3 个免费模型，如果都失败就结束，而不是尝试所有候选模型。
 
-## Phase 2: 模型评分与智能推荐（2-3小时）
-
-### 2.1 目标
-自动识别性能最佳的免费模型，给用户提供「一键选择最佳」按钮
-
-### 2.2 简化版评分算法
-
+**当前降级逻辑**（已检查 src/fallback.ts）：
 ```typescript
-// src/models.ts
-export interface ModelScore {
-  model: OpenRouterModel;
-  score: number;
-  reasons: string[];
-}
-
-const TRUSTED_PROVIDERS = [
-  'google', 'meta-llama', 'mistralai', 'deepseek',
-  'nvidia', 'qwen', 'microsoft', 'allenai'
-];
-
-export function rankModels(models: OpenRouterModel[]): ModelScore[] {
-  return models.map(model => {
-    let score = 0;
-    const reasons: string[] = [];
-    
-    // 1. 上下文长度评分 (0-40分)
-    const contextLength = model.context_length || 0;
-    const contextScore = Math.min(contextLength / 32000, 1) * 40;
-    score += contextScore;
-    if (contextScore >= 40) reasons.push('超长上下文(32k+)');
-    else if (contextScore >= 20) reasons.push('长上下文(16k+)');
-    
-    // 2. 提供商信任度 (0-30分)
-    const provider = model.id.split('/')[0].toLowerCase();
-    const providerIndex = TRUSTED_PROVIDERS.indexOf(provider);
-    const providerScore = providerIndex >= 0 
-      ? (1 - providerIndex / TRUSTED_PROVIDERS.length) * 30 
-      : 10;
-    score += providerScore;
-    if (providerScore >= 25) reasons.push('知名提供商');
-    
-    // 3. 模型参数评分 (0-20分) - 从名称中提取参数数值
-    const paramScore = extractParameterScore(model.name);
-    score += paramScore.score;
-    if (paramScore.reason) reasons.push(paramScore.reason);
-
-    return { model, score: Math.round(score), reasons };
-  }).sort((a, b) => b.score - a.score);
-}
-
-// 从模型名称中提取参数评分
-function extractParameterScore(name: string): { score: number; reason?: string } {
-  const match = name.match(/(\d+(?:\.\d+)?)\s*[bB]\b/);
-  if (!match) return { score: 0 };
-
-  const params = parseFloat(match[1]);
-
-  if (params >= 70) {
-    return { score: 20, reason: `大参数(${params}B)` };
-  } else if (params >= 30) {
-    return { score: 15, reason: `中参数(${params}B)` };
-  } else if (params >= 13) {
-    return { score: 10, reason: `标准参数(${params}B)` };
-  } else if (params >= 7) {
-    return { score: 5, reason: `轻量参数(${params}B)` };
-  }
-
-  return { score: 2, reason: `小参数(${params}B)` };
-}
-
-// 获取推荐模型
-export function getRecommendedModel(models: OpenRouterModel[]): ModelScore | null {
-  const ranked = rankModels(models);
-  return ranked[0] || null;
-}
-```
-
-### 2.3 API 接口更新
-
-```typescript
-// src/server.ts
-app.get('/admin/models', async (c) => {
-  try {
-    const forceRefresh = c.req.query('refresh') === 'true';
-    const models = await fetchModels(forceRefresh);
-    const freeModels = filterFreeModels(models);
-    const rankedModels = rankModels(freeModels);
-    
-    return c.json({
-      models: rankedModels.map(({ model, score, reasons }) => ({
-        id: model.id,
-        name: model.name,
-        context_length: model.context_length,
-        score,
-        reasons,
-        is_recommended: score >= 80
-      })),
-      recommended: rankedModels[0]?.model.id
-    });
-  } catch (err: any) {
-    console.error('Error fetching models:', err);
-    return c.json({ error: err.message }, 500);
-  }
-});
-```
-
-### 2.4 Web UI 更新
-
-```html
-<div class="header">
-  <h1>OpenRouter Free Proxy</h1>
-  <div>
-    <button class="btn btn-secondary" id="recommendBtn">🎖️ 使用推荐模型</button>
-    <button class="btn" id="refreshBtn">刷新模型列表</button>
-  </div>
-</div>
-
-<div id="recommendedBanner" style="display: none;" class="banner">
-  🏆 智能推荐: <span id="recommendedName"></span> 
-  评分: <span id="recommendedScore"></span>
-  <button class="btn btn-small" onclick="useRecommended()">一键使用</button>
-</div>
-
-<script>
-async function loadModels(forceRefresh = false) {
-  const res = await fetch(url);
-  const data = await res.json();
-  
-  if (data.recommended) {
-    const recommended = data.models.find(m => m.id === data.recommended);
-    if (recommended) {
-      document.getElementById('recommendedName').textContent = recommended.name;
-      document.getElementById('recommendedScore').textContent = recommended.score;
-      document.getElementById('recommendedBanner').style.display = 'block';
-    }
+// 当前实现（第23行）
+for (const { model } of ranked.slice(0, 3)) {  // 只取前 3 个
+  if (!chain.includes(model.id)) {
+    chain.push(model.id);
   }
 }
-</script>
+
+// 降级链组成（第11-37行）
+// 1. preferredModel（用户指定的模型）
+// 2. 前 3 个免费模型
+// 3. openrouter/free（兜底）
+// 4. 尝试所有模型后抛出错误
 ```
+
+**问题**：
+- 如果前 3 个模型都不可用，就直接 fallback 到 `openrouter/free` 或报错
+- 没有尝试所有候选模型
+- 用户看不到哪些模型真的不可用
+
+**解决方案**：
+
+**方案 A：尝试所有候选模型 + 记录失败模型**
+
+1. **修改降级逻辑**：
+   - 从候选池获取所有可用模型
+   - 尝试所有候选模型，而不是只试前 3 个
+   - 记录失败的模型，下次优先跳过
+   
+   ```typescript
+   // 改进逻辑
+   const candidateModels = candidatePool.getCandidates();
+   const failedModels = new Set<string>();
+   
+   for (const model of candidateModels) {
+     if (failedModels.has(model.id)) {
+       continue; // 跳过已失败的模型
+     }
+     
+     try {
+       const result = await execute(model.id);
+       return result;
+     } catch (error) {
+       failedModels.add(model.id);
+       candidatePool.markModelFailed(model.id);
+       continue;
+     }
+   }
+   
+   // 所有候选模型都失败了
+   throw new Error("当前时段无可用模型，请稍后重试");
+   ```
+
+2. **失败模型记录**：
+   - 内存记录：当前运行期间速记
+   - 过期机制：失败记录保留一定时间后清除
+
+**本期采用**：
+- 尝试所有候选模型（不限制数量）
+- 记录失败模型，下次跳过
+- 最后尝试 `openrouter/free` 作为兜底
+- 不显示复杂错误详情，简化用户体验
+
+### 实现计划调整
+
+**新增功能**：
+1. 候选池管理模块（`src/candidate-pool.ts`）
+2. 失败模型记录（内存）
+3. 改进的降级策略
+
+**调整后的阶段**：
+
+**阶段 X：模型可用性优化**（在阶段 2 之后）
+
+**步骤**：
+1. 创建推荐模型列表（需要研究和验证）
+2. 修改 `/models` 接口，只返回推荐模型
+3. 修改降级逻辑，增加重试次数和错误信息
+4. 添加失败模型记录功能
+5. 测试：模拟不可用模型场景
+
+**交付物**：
+- 候选池管理模块（验证、缓存、更新）
+- Web 界面只显示验证过的模型
+- 尝试所有候选模型的降级策略
+- 失败模型记录功能
 
 ---
 
-## Phase 3: Fallback 机制 + 速率限制处理（核心，4-6小时）
+## 时间估算
 
-### 3.1 设计目标
-- 用户选择的模型不可用时，自动切换到备选模型
-- 记录速率限制状态，避免重复尝试已限流的模型
-- 通过响应头告知用户实际使用的模型
-
-### 3.2 数据结构设计
-
-```typescript
-// src/rate-limit.ts
-import { readFile, writeFile } from 'node:fs/promises';
-import { existsSync } from 'node:fs';
-
-interface RateLimitState {
-  [modelId: string]: {
-    limited_at: string;
-    retry_after?: number;
-    reason: 'rate_limit' | 'unavailable' | 'error';
-  };
-}
-
-const RATE_LIMIT_FILE = 'rate-limit-state.json';
-const RATE_LIMIT_COOLDOWN_MINUTES = 30;
-
-let memoryState: RateLimitState | null = null;
-
-export async function loadRateLimitState(): Promise<RateLimitState> {
-  if (memoryState) return memoryState;
-  
-  if (!existsSync(RATE_LIMIT_FILE)) {
-    memoryState = {};
-    return memoryState;
-  }
-  
-  try {
-    const content = await readFile(RATE_LIMIT_FILE, 'utf-8');
-    memoryState = JSON.parse(content);
-    return memoryState;
-  } catch {
-    memoryState = {};
-    return memoryState;
-  }
-}
-
-export async function saveRateLimitState(state: RateLimitState) {
-  memoryState = state;
-  await writeFile(RATE_LIMIT_FILE, JSON.stringify(state, null, 2));
-}
-
-export function isModelRateLimited(modelId: string): boolean {
-  const state = memoryState || {};
-  const record = state[modelId];
-  if (!record) return false;
-  
-  const limitedAt = new Date(record.limited_at);
-  const cooldownEnd = new Date(limitedAt.getTime() + RATE_LIMIT_COOLDOWN_MINUTES * 60 * 1000);
-  return Date.now() < cooldownEnd.getTime();
-}
-
-export async function markModelRateLimited(
-  modelId: string, 
-  reason: 'rate_limit' | 'unavailable' | 'error' = 'rate_limit',
-  retryAfter?: number
-) {
-  const state = await loadRateLimitState();
-  state[modelId] = {
-    limited_at: new Date().toISOString(),
-    retry_after: retryAfter,
-    reason
-  };
-  await saveRateLimitState(state);
-  console.log(`[RateLimit] Model ${modelId} marked as ${reason}`);
-}
-```
-
-### 3.3 Fallback 核心实现
-
-```typescript
-// src/config.ts
-export interface Config {
-  preferred_model?: string;  // 用户偏好（可选），默认用评分最高的
-}
-
-export const DEFAULT_CONFIG: Config = {
-  preferred_model: undefined  // 未设置时使用自动推荐
-};
-```
-
-```typescript
-// src/fallback.ts
-import { getConfig } from './config';
-import { isModelRateLimited, markModelRateLimited } from './rate-limit';
-import { fetchModels, filterFreeModels, rankModels } from './models';
-
-export interface FallbackResult {
-  model: string;
-  is_fallback: boolean;
-  attempted_models: string[];
-  fallback_reason?: string;
-}
-
-export async function getFallbackChain(preferredModel?: string): Promise<string[]> {
-  const chain: string[] = [];
-  
-  // 1. 添加用户偏好模型（如果有）
-  if (preferredModel) {
-    chain.push(preferredModel);
-  }
-  
-  // 2. 添加评分最高的前3个免费模型
-  try {
-    const models = await fetchModels();
-    const freeModels = filterFreeModels(models);
-    const ranked = rankModels(freeModels);
-    
-    for (const { model } of ranked.slice(0, 3)) {
-      if (!chain.includes(model.id)) {
-        chain.push(model.id);
-      }
-    }
-  } catch (err) {
-    console.error('[Fallback] Failed to get fallback models:', err);
-  }
-  
-  // 3. 最后兜底：openrouter/free
-  if (!chain.includes('openrouter/free')) {
-    chain.push('openrouter/free');
-  }
-  
-  return chain;
-}
-
-export async function executeWithFallback<T>(
-  preferredModel: string | undefined,
-  execute: (model: string) => Promise<{ success: boolean; response?: T; error?: any }>
-): Promise<{ result: T; fallbackInfo: FallbackResult }> {
-  const chain = await getFallbackChain(preferredModel);
-  const attemptedModels: string[] = [];
-  
-  for (const model of chain) {
-    if (isModelRateLimited(model)) {
-      console.log(`[Fallback] Skipping ${model} (rate limited)`);
-      attemptedModels.push(`${model}(rate_limited)`);
-      continue;
-    }
-    
-    console.log(`[Fallback] Trying model: ${model}`);
-    const { success, response, error } = await execute(model);
-    
-    if (success && response) {
-      return {
-        result: response,
-        fallbackInfo: {
-          model,
-          is_fallback: model !== preferredModel,
-          attempted_models: attemptedModels,
-          fallback_reason: model !== preferredModel 
-            ? `${preferredModel || 'auto-selected'} unavailable, fallback to ${model}` 
-            : undefined
-        }
-      };
-    }
-    
-    attemptedModels.push(model);
-    
-    if (error?.status === 429) {
-      await markModelRateLimited(model, 'rate_limit', error.retry_after);
-    } else if (error?.status === 503) {
-      await markModelRateLimited(model, 'unavailable');
-    }
-  }
-  
-  throw new Error(`All models failed. Attempted: ${attemptedModels.join(', ')}`);
-}
-```
-
-### 3.4 集成到 Server
-
-```typescript
-// src/server.ts
-import { executeWithFallback } from './fallback';
-
-app.post('/v1/chat/completions', async (c) => {
-  try {
-    const body = await c.req.json();
-    const headers = Object.fromEntries(c.req.raw.headers.entries());
-    const config = await getConfig();
-    
-    const result = await executeWithFallback(
-      config.preferred_model,
-      async (modelToTry) => {
-        body.model = modelToTry;
-        
-        const proxyHeaders: Record<string, string> = {
-          'Authorization': `Bearer ${ENV.OPENROUTER_API_KEY}`,
-          'HTTP-Referer': 'http://localhost:8765',
-          'X-Title': 'OpenRouter Free Proxy',
-          'Content-Type': 'application/json'
-        };
-        
-        Object.entries(headers).forEach(([key, value]) => {
-          if (!['host', 'content-length', 'authorization'].includes(key.toLowerCase())) {
-            proxyHeaders[key] = value;
-          }
-        });
-        
-        try {
-          const response = await fetchWithTimeout(
-            `${ENV.OPENROUTER_BASE_URL}/chat/completions`,
-            {
-              method: 'POST',
-              headers: proxyHeaders,
-              body: JSON.stringify(body)
-            },
-            60000
-          );
-          
-          if (response.ok) {
-            return { success: true, response };
-          }
-          
-          const errorBody = await response.text();
-          return {
-            success: false,
-            error: {
-              status: response.status,
-              message: errorBody,
-              retry_after: response.headers.get('retry-after')
-            }
-          };
-        } catch (err: any) {
-          return { success: false, error: { message: err.message } };
-        }
-      }
-    );
-    
-    const response = result.result;
-    const fallbackInfo = result.fallbackInfo;
-    
-    c.header('X-Actual-Model', fallbackInfo.model);
-    if (fallbackInfo.is_fallback) {
-      c.header('X-Fallback-Used', 'true');
-      c.header('X-Fallback-Reason', fallbackInfo.fallback_reason || 'Primary model unavailable');
-    }
-    
-    if (body.stream) {
-      const responseHeaders = Object.fromEntries(response.headers.entries());
-      c.status(response.status as any);
-      Object.entries(responseHeaders).forEach(([key, value]) => {
-        if (key.toLowerCase() !== 'content-encoding') {
-          c.header(key, value);
-        }
-      });
-      
-      return stream(c, async (stream) => {
-        if (!response.body) return;
-        const reader = response.body.getReader();
-        let done = false;
-        while (!done) {
-          const chunk = await reader.read();
-          done = chunk.done;
-          if (!done && chunk.value) await stream.write(chunk.value);
-        }
-      });
-    }
-    
-    const data = await response.json();
-    return c.json(data, { status: response.status as any });
-    
-  } catch (err: any) {
-    console.error(`[${new Date().toISOString()}] Request error:`, err.message);
-    return c.json({
-      error: {
-        message: err.message,
-        type: 'internal_error',
-        code: 500
-      }
-    }, 500);
-  }
-});
-```
+| 阶段 | 工作内容 | 预计时间 |
+|------|----------|----------|
+| 阶段 1 | API Key 配置 | 2-3 小时 |
+| 阶段 2 | 模型列表显示 | 1 小时 |
+| 阶段 X | 模型可用性优化 | 2-3 小时 |
+| 阶段 3 | OpenClaw 检测 | 1-2 小时 |
+| 阶段 4 | 一键配置 | 2-3 小时 |
+| 阶段 5 | 配置恢复 | 1-2 小时 |
+| 测试 | 单元测试 + 集成测试 | 2-3 小时 |
+| **总计** | | **11-17 小时** |
 
 ---
 
-## Phase 4: 简化与清理（1小时）
+## 风险点
 
-### 4.1 最终架构
+1. **OpenClaw 配置格式变化**
+   - 风险：OpenClaw 更新后配置格式可能改变
+   - 应对：监控 OpenClaw 更新，必要时调整
 
-```
-用户请求
-   ↓
-有偏好模型？→ 是 → 尝试偏好模型
-   ↓ 否
-自动选择评分最高模型
-   ↓
-模型可用？→ 是 → 使用
-   ↓ 否
-尝试 Fallback 链（评分排序）
-   ↓
-遇到 429？→ 标记冷却 → 尝试下一个
-   ↓
-返回结果 + X-Actual-Model
-```
+2. **跨平台路径问题**
+   - 风险：Windows 路径分隔符不同
+   - 应对：使用 `path.join()` 处理路径
 
-### 4.2 最小化配置
+3. **API Key 验证失败处理**
+   - 风险：验证接口不稳定
+   - 应对：提供重试机制，记录错误日志
 
-```typescript
-// src/config.ts
-interface Config {
-  preferred_model?: string;  // 可选，用户偏好
-}
-
-// .env
-OPENROUTER_API_KEY=xxx
-OPENROUTER_BASE_URL=https://openrouter.ai/api/v1
-PORT=8765
-```
-
-### 4.3 API 接口
-
-```
-POST   /v1/chat/completions    # 核心：带自动 fallback
-GET    /admin/models           # 获取免费模型列表（带评分）
-PUT    /admin/model            # 设置偏好模型（可选）
-GET    /                       # Web UI
-```
+4. **配置文件权限**
+   - 风险：用户没有写入权限
+   - 应对：捕获错误并提示用户
 
 ---
 
-## 实施顺序
+## 用户视角流程（最终）
 
-```
-Day 1: Phase 1 (pricing=0 检测)
-Day 2: Phase 2 (模型评分 + 推荐)
-Day 3-4: Phase 3 (Fallback 核心)
-Day 5: Phase 4 (简化清理)
-```
+### 新用户（第一次使用）
 
-### 验收标准
+1. `git clone <repo> && cd <repo>`
+2. `npm install && npm start`
+3. 打开 `http://localhost:8765`
+4. 输入 OpenRouter API Key，点击"保存并验证"
+5. 点击"一键配置到 OpenClaw"
+6. 打开 OpenClaw，执行 `/model free_proxy/auto`
+7. 开始使用
 
-**Phase 1**:
-- [ ] 模型列表比原来多
-- [ ] pricing=0 模型被正确识别
+**步骤减少**：从 7 步到 3 步（实质交互）
+**概念简化**：不需要理解 base_url、配置文件位置
 
-**Phase 2**:
-- [ ] Web UI 显示「🎖️ 使用推荐模型」按钮
-- [ ] 点击后自动切换到评分最高的模型
-- [ ] 模型列表显示评分
+### 老用户（已配置过）
 
-**Phase 3**:
-- [ ] 连续发送 20 个请求，不会遇到 429 错误
-- [ ] 响应头 `X-Actual-Model` 显示实际使用的模型
-- [ ] 故意选择限速模型，自动 fallback 成功
+1. `npm start`
+2. 打开 `http://localhost:8765`
+3. 点击"更新配置"（如有新版本）
+4. 切换模型使用
 
----
-
-## 资源消耗
-
-| 功能 | 内存消耗 | 额外请求 |
-|------|---------|---------|
-| pricing=0 检测 | 0 | 0 |
-| 模型评分 | ~100KB | 0 |
-| Fallback 机制 | ~50KB | 失败时 N 次 |
-
-**总内存**：< 200KB
+**场景**：主要是查看模型列表和状态
 
 ---
 
-## 最终效果
+## TODO List
 
-- **默认行为**：自动使用评分最高的免费模型
-- **用户可选**：在 Web UI 选择偏好模型
-- **自动处理**：fallback、速率限制、冷却
-- **透明告知**：响应头显示实际使用的模型
+### 阶段 1：API Key 配置（基础功能）
 
-**体验目标**：「无感使用免费 API」，无需手工切换
+- [x] 后端开发
+  - [x] 实现 `src/config.ts`
+    - [x] `saveApiKey(key: string)` - 保存 API Key 到 .env
+    - [x] `getApiKeyStatus()` - 获取当前 API Key 状态
+    - [x] `maskApiKey(key: string)` - 打码显示
+  - [x] 实现 `src/server.ts` 路由
+    - [x] `POST /api/validate-key` - 验证 API Key 并保存
+    - [x] 调用 OpenRouter API 测试 Key 有效性
+    - [x] 错误处理（格式错误、无效、网络错误）
 
----
+- [x] 前端开发
+  - [x] 实现 `public/index.html`
+    - [x] API Key 输入框（password 类型）
+    - [x] "获取 Key" 链接
+    - [x] "保存并验证" 按钮
+    - [x] 状态显示区域（未配置/已配置/验证中/验证失败）
+    - [x] 已配置状态下的"修改"按钮
 
-## 完整任务清单
+- [ ] 测试
+  - [ ] 有效 API Key 输入和验证
+  - [ ] 无效 API Key 输入和验证
+  - [ ] API Key 格式错误处理
+  - [ ] 网络错误处理
+  - [ ] .env 文件权限设置（600）
 
-### Phase 1: 增强免费模型检测（Day 1）✅
+### 阶段 2：模型列表显示
 
-- [x] 1.1 更新 `src/models.ts`
-  - [x] 1.1.1 修改 `OpenRouterModel` 接口，添加 pricing 字段
-  - [x] 1.1.2 修改 `filterFreeModels` 函数，实现双重检测逻辑
-  - [x] 1.1.3 添加单元测试验证 pricing=0 检测
+- [x] 后端开发
+  - [x] 修改 `GET /models` 接口
+    - [x] 添加 description 字段
+    - [x] 简化返回格式
 
-- [x] 1.2 验证
-  - [x] 1.2.1 启动服务
-  - [x] 1.2.2 调用 `/admin/models` 接口
-  - [x] 1.2.3 确认模型数量比原来多
+- [x] 前端开发
+  - [x] 实现模型列表显示
+    - [x] 从 `/models` 接口获取数据
+    - [x] 显示模型 ID 和说明
+    - [x] 显示使用提示 `/model free_proxy/auto`
 
-### Phase 2: 模型评分与智能推荐（Day 2）✅
+- [ ] 测试
+  - [ ] 验证模型列表正确显示
+  - [ ] 验证 description 字段正确显示
 
-- [x] 2.1 更新 `src/models.ts`
-  - [x] 2.1.1 添加 `ModelScore` 接口
-  - [x] 2.1.2 添加 `TRUSTED_PROVIDERS` 常量
-  - [x] 2.1.3 实现 `rankModels` 评分函数
-  - [x] 2.1.4 实现 `extractParameterScore` 参数提取函数
-  - [x] 2.1.5 实现 `getRecommendedModel` 函数
-  - [x] 2.1.6 添加单元测试
+### 阶段 X：模型可用性优化
 
-- [x] 2.2 更新 `src/server.ts`
-  - [x] 2.2.1 修改 `/admin/models` 接口，调用 `rankModels`
-  - [x] 2.2.2 返回评分和推荐理由
+- [x] 后端开发
+  - [x] 创建 `src/candidate-pool.ts`
+    - [x] `validateModel(modelId: string)` - 验证模型可用性
+    - [x] `refresh()` - 刷新候选池
+    - [x] `getCandidates()` - 获取候选模型列表
+    - [x] `markModelFailed(modelId: string)` - 标记失败模型
+    - [x] 在内存中维护候选池 Map
+  - [x] 修改 `GET /models` 接口
+    - [x] 返回候选池内的模型
+    - [x] 启动时自动验证一次
+  - [x] 修改 `src/fallback.ts`
+    - [x] 从候选池获取所有模型（移除 `.slice(0, 3)` 限制）
+    - [x] 尝试所有候选模型
+    - [x] 记录失败模型到候选池
+    - [x] 最后尝试 `openrouter/free` 兜底
 
-- [x] 2.3 更新 `public/index.html`
-  - [x] 2.3.1 添加「🎖️ 使用推荐模型」按钮
-  - [x] 2.3.2 添加推荐横幅展示区域
-  - [x] 2.3.3 修改 `loadModels` 函数，显示评分
-  - [x] 2.3.4 实现 `useRecommended` 函数
+- [x] 前端开发
+  - [x] 实现模型刷新功能
+    - [x] "刷新模型列表" 按钮
+    - [x] 显示"上次更新时间"
+    - [x] 显示验证进度 "正在验证模型可用性... (3/10)"
 
-- [x] 2.4 验证
-  - [x] 2.4.1 Web UI 显示评分
-  - [x] 2.4.2 点击「使用推荐模型」切换到最高评分的模型
+- [ ] 测试
+  - [ ] 模拟不可用模型场景
+  - [ ] 验证降级策略（尝试所有候选模型）
+  - [ ] 验证失败模型记录
+  - [ ] 验证候选池刷新功能
 
-### Phase 3: Fallback 机制 + 速率限制处理（Day 3-4）✅
+### 阶段 3：OpenClaw 配置检测
 
-- [x] 3.1 创建 `src/rate-limit.ts`
-  - [x] 3.1.1 定义 `RateLimitState` 接口
-  - [x] 3.1.2 实现 `loadRateLimitState` 函数
-  - [x] 3.1.3 实现 `saveRateLimitState` 函数
-  - [x] 3.1.4 实现 `isModelRateLimited` 函数
-  - [x] 3.1.5 实现 `markModelRateLimited` 函数
-  - [x] 3.1.6 添加单元测试
+- [x] 后端开发
+  - [x] 创建 `src/openclaw-config.ts`
+    - [x] `detectOpenClawConfig()` - 检测配置文件
+    - [x] 检查 `~/.openclaw/openclaw.json` 是否存在
+    - [x] 验证 JSON 格式是否有效
+  - [x] 实现 `src/server.ts` 路由
+    - [x] `GET /api/detect-openclaw` - 返回配置文件状态
 
-- [x] 3.2 更新 `src/config.ts`
-  - [x] 3.2.1 修改 `Config` 接口，使用 `preferred_model?: string`
-  - [x] 3.2.2 更新 `DEFAULT_CONFIG`
+- [x] 前端开发
+  - [x] 实现检测状态显示
+    - [x] 显示"已检测到 OpenClaw" 或 "未检测到 OpenClaw"
+    - [x] 显示配置文件路径
 
-- [x] 3.3 创建 `src/fallback.ts`
-  - [x] 3.3.1 定义 `FallbackResult` 接口
-  - [x] 3.3.2 实现 `getFallbackChain` 函数
-  - [x] 3.3.3 实现 `executeWithFallback` 函数
-  - [x] 3.3.4 添加单元测试
+- [ ] 测试
+  - [ ] 有配置文件时的表现
+  - [ ] 无配置文件时的表现
+  - [ ] 配置文件损坏时的表现
 
-- [x] 3.4 更新 `src/server.ts`
-  - [x] 3.4.1 导入 `executeWithFallback`
-  - [x] 3.4.2 重写 `/v1/chat/completions` 处理逻辑
-  - [x] 3.4.3 添加 `X-Actual-Model` 响应头
-  - [x] 3.4.4 添加 `X-Fallback-Used` 响应头
-  - [x] 3.4.5 添加 `X-Fallback-Reason` 响应头
+### 阶段 4：一键配置
 
-- [x] 3.5 验证
-  - [x] 3.5.1 连续发送 20 个请求，无 429 错误
-  - [x] 3.5.2 检查响应头显示实际模型
-  - [x] 3.5.3 选择一个被限速的模型，验证自动 fallback
-  - [x] 3.5.4 检查 `rate-limit-state.json` 文件生成
+- [x] 后端开发
+  - [x] 完善 `src/openclaw-config.ts`
+    - [x] `mergeConfig()` - 合并配置
+    - [x] 创建备份文件
+    - [x] 添加 free_proxy provider
+    - [x] 添加 free_proxy/auto 模型
+    - [x] 不修改用户的默认模型配置
+    - [x] 处理边界情况（文件不存在、JSON 格式错误等）
+  - [x] 实现 `src/server.ts` 路由
+    - [x] `POST /api/configure-openclaw` - 执行配置
+    - [x] 验证 API Key 有效性（前置条件）
+    - [x] 返回备份文件名
 
-### Phase 4: 简化与清理（Day 5）✅
+- [x] 前端开发
+  - [x] 实现一键配置按钮
+    - [x] 点击前显示确认提示
+    - [x] 显示"正在配置..."
+    - [x] 显示"✓ 配置成功"
+    - [x] 显示备份文件名
 
-- [x] 4.1 代码审查与清理
-  - [x] 4.1.1 删除未使用的导入
-  - [x] 4.1.2 删除未使用的变量和函数
-  - [x] 4.1.3 检查并修复 TypeScript 类型错误
+- [ ] 测试
+  - [ ] 无配置文件时创建
+  - [ ] 有配置文件时合并
+  - [ ] 配置文件损坏时报错
+  - [ ] 已存在 free_proxy 时覆盖（提醒）
+  - [ ] 备份文件创建
+  - [ ] API Key 未验证时禁止配置
 
-- [x] 4.2 测试
-  - [x] 4.2.1 运行 `npm test`，确保所有测试通过
-  - [x] 4.2.2 测试流式响应
-  - [x] 4.2.3 测试非流式响应
-  - [x] 4.2.4 测试 Web UI 所有功能
+### 阶段 5：配置恢复
 
-- [x] 4.3 文档更新
-  - [x] 4.3.1 更新 README.md，说明新功能
-  - [x] 4.3.2 添加使用示例
-  - [x] 4.3.3 添加截图说明
+- [x] 后端开发
+  - [x] 完善 `src/openclaw-config.ts`
+    - [x] `listBackups()` - 列出备份文件
+    - [x] `restoreBackup(backup: string)` - 恢复备份
+  - [x] 实现 `src/server.ts` 路由
+    - [x] `GET /api/backups` - 获取备份列表
+    - [x] `POST /api/restore-backup` - 恢复指定备份
 
-- [x] 4.4 最终验证
-  - [x] 4.4.1 完整流程测试
-  - [x] 4.4.2 性能测试（内存占用）
-  - [x] 4.4.3 长时间运行测试（30分钟）
+- [x] 前端开发
+  - [x] 实现备份管理界面
+    - [x] 显示最近的备份文件
+    - [x] "恢复上一个配置" 按钮
+    - [x] 确认恢复提示
+    - [x] 显示"✓ 已恢复"
 
----
+- [ ] 测试
+  - [ ] 备份文件列表
+  - [ ] 恢复操作
+  - [ ] 恢复后配置文件验证
 
-## 项目完成后结构
+### 最终测试
 
-```
-or_free_proxy/
-├── src/
-│   ├── server.ts          # 主服务（修改）
-│   ├── models.ts          # 模型检测与评分（修改）
-│   ├── config.ts          # 配置管理（修改）
-│   ├── rate-limit.ts      # 速率限制管理（新增）
-│   └── fallback.ts        # Fallback 逻辑（新增）
-├── public/
-│   └── index.html         # Web UI（修改）
-├── __tests__/
-│   ├── models.test.ts     # 模型测试
-│   ├── rate-limit.test.ts # 速率限制测试
-│   └── fallback.test.ts   # Fallback 测试
-├── config.json            # 用户偏好配置
-├── rate-limit-state.json  # 速率限制状态
-├── .env                   # API Key
-├── package.json
-├── tsconfig.json
-└── README.md
-```
+- [ ] 单元测试
+  - [ ] API Key 验证（有效、无效、格式错误、网络错误）
+  - [ ] OpenClaw 配置检测（存在、不存在、格式错误）
+  - [ ] 配置合并（正常、创建、路径不存在、覆盖）
 
----
+- [ ] 集成测试
+  - [ ] 完整流程：输入 Key → 验证 → 显示模型 → 配置 OpenClaw
+  - [ ] 边界场景：OpenClaw 未安装、配置文件损坏、已配置过 free_proxy
 
-## 验收标准总览
-
-| 功能 | 验收标准 | 状态 |
-|------|----------|------|
-| 免费模型检测 | 模型列表包含 pricing=0 的模型 | ✅ |
-| 模型评分 | Web UI 显示评分和推荐理由 | ✅ |
-| 智能推荐 | 一键使用评分最高的模型 | ✅ |
-| Fallback 机制 | 失败时自动切换，响应头告知 | ✅ |
-| 速率限制 | 30分钟冷却，避免重复请求 | ✅ |
-| 流式响应 | 支持流式输出，无延迟 | ✅ |
-| 测试覆盖 | 所有核心功能都有单元测试 | ✅ |
+- [ ] 手动测试
+  - [ ] 启动服务：`npm start`
+  - [ ] 打开浏览器：`http://localhost:8765`
+  - [ ] 输入 OpenRouter API Key
+  - [ ] 验证状态显示
+  - [ ] 查看模型列表
+  - [ ] 刷新模型列表
+  - [ ] 点击"一键配置到 OpenClaw"
+  - [ ] 打开 OpenClaw，执行 `/model free_proxy/auto`
+  - [ ] 发送消息测试
+  - [ ] 恢复配置备份
