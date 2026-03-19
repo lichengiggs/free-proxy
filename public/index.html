@@ -258,10 +258,10 @@
 
         openClawSection.style.display = 'block';
 
-        if (data.detected && data.valid) {
+        if (data.exists && data.isValid) {
           statusEl.innerHTML = `<div class="status status-success"><strong>✓ 已检测到 OpenClaw</strong><br><span style="font-size: 0.875rem;">配置文件: ${data.path}</span></div>`;
           actionsEl.innerHTML = `<button class="btn btn-primary" onclick="configureOpenClaw()">更新 OpenClaw 配置</button>`;
-        } else if (data.detected && !data.valid) {
+        } else if (data.exists && !data.isValid) {
           statusEl.innerHTML = `<div class="status status-error"><strong>配置文件格式错误</strong><br>请手动检查或删除 ${data.path}</div>`;
           actionsEl.innerHTML = '';
         } else {
@@ -309,7 +309,7 @@
             <h3 style="font-size: 1rem; margin-bottom: 0.5rem;">配置备份</h3>
             ${data.backups.slice(0, 3).map(b => `
               <div class="backup-item">
-                <span style="font-size: 0.875rem; color: #6b7280;">${b.split('.back')[0].split('/').pop()}</span>
+                <span style="font-size: 0.875rem; color: #6b7280;">${b.split('/').pop()}</span>
                 <button class="btn btn-secondary" onclick="restoreBackup('${b}')" style="padding: 0.25rem 0.5rem; font-size: 0.75rem;">恢复</button>
               </div>
             `).join('')}

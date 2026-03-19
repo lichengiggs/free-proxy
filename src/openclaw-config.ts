@@ -55,8 +55,12 @@ export async function mergeConfig(): Promise<ConfigureResult> {
     existingConfig = status.content as object;
   }
 
-  const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
-  const backupPath = `${OPENCLAW_CONFIG_PATH}.backup.${timestamp}`;
+  const files = existsSync(OPENCLAW_DIR) ? readdirSync(OPENCLAW_DIR) : [];
+  const existingBackups = files.filter(f => /^openclaw\.bak\d+$/.test(f));
+  const nextNum = existingBackups.length > 0
+    ? Math.max(...existingBackups.map(f => parseInt(f.replace('openclaw.bak', '')) || 0)) + 1
+    : 1;
+  const backupPath = join(OPENCLAW_DIR, `openclaw.bak${nextNum}`);
   
   if (status.exists) {
     const content = readFileSync(OPENCLAW_CONFIG_PATH, 'utf-8');
@@ -112,9 +116,12 @@ export async function listBackups(): Promise<string[]> {
 
   const files = readdirSync(OPENCLAW_DIR);
   const backups = files
-    .filter(f => f.startsWith('openclaw.json.backup.'))
-    .sort()
-    .reverse();
+    .filter(f => /^openclaw\.bak\d+$/.test(f))
+    .sort((a, b) => {
+      const numA = parseInt(a.replace('openclaw.bak', '')) || 0;
+      const numB = parseInt(b.replace('openclaw.bak', '')) || 0;
+      return numB - numA;
+    });
   
   return backups;
 }
