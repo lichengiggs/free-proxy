@@ -1,7 +1,7 @@
 {
-  "name": "openrouter-free-proxy",
+  "name": "free_proxy",
   "version": "1.0.0",
-  "description": "本地 OpenRouter 免费模型代理服务，支持动态切换模型，无需修改编码工具配置",
+  "description": "本地聚合多 provider 的免费模型代理服务，支持动态切换模型，无需修改客户端配置",
   "type": "module",
   "main": "src/server.ts",
   "scripts": {

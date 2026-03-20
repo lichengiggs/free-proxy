@@ -1,4 +1,4 @@
-# or-free-proxy
+# free_proxy
 
 [中文](README.md) | [English](README_EN.md)
 
@@ -19,8 +19,8 @@
 1) 安装依赖
 
 ```bash
-git clone https://github.com/lichengiggs/or-free-proxy.git
-cd or-free-proxy
+git clone https://github.com/lichengiggs/free_proxy.git
+cd free_proxy
 npm install
 ```
 
