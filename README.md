@@ -50,10 +50,25 @@ npm start
 
 ## 用好了
 
-现在你的 AI 客户端（OpenClaw、Cursor 等）把 API 地址改成：
+现在你的 AI 客户端（OpenClaw、Cursor 等）配置成：
 
-```
-http://localhost:8765/v1
+```json
+{
+  "provider": {
+    "free_proxy": {
+      "name": "free_proxy",
+      "options": {
+        "baseURL": "http://127.0.0.1:8765/v1",
+        "apiKey": "sk-not-needed"
+      },
+      "models": {
+        "auto": {
+          "name": "auto"
+        }
+      }
+    }
+  }
+}
 ```
 
 API Key 随便填，模型名也随便填，工具会自动处理。
