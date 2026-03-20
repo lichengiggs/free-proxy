@@ -1,4 +1,6 @@
 import { ENV, fetchWithTimeout } from './config';
+import { PROVIDERS } from './providers/registry';
+import type { Model, ModelScore as ProviderModelScore } from './providers/types';
 
 export interface OpenRouterModel {
   id: string;
@@ -61,7 +63,57 @@ export interface ModelScore {
 
 const TRUSTED_PROVIDERS = [
   'google', 'meta-llama', 'mistralai', 'deepseek',
-  'nvidia', 'qwen', 'microsoft', 'allenai'
+  'nvidia', 'qwen', 'microsoft', 'allenai',
+  'groq', 'minimax', 'glm', 'stepfun', 'mimo'
+];
+
+export async function fetchAllModels(): Promise<Model[]> {
+  const allModels: Model[] = [];
+
+  for (const provider of PROVIDERS) {
+    const key = process.env[provider.apiKeyEnv];
+    if (!key) continue;
+
+    try {
+      const response = await fetchWithTimeout(`${provider.baseURL}/models`, {
+        headers: { 'Authorization': `Bearer ${key}` }
+      });
+
+      if (!response.ok) continue;
+
+      const data = await response.json();
+      const models: Model[] = (data.data || []).map((m: any) => ({
+        id: m.id,
+        name: m.name || m.id,
+        provider: provider.name,
+        context_length: m.context_length,
+        pricing: {
+          prompt: m.pricing?.prompt || '0',
+          completion: m.pricing?.completion || '0'
+        }
+      }));
+
+      const prefixedModels = models.map(m => ({
+        ...m,
+        id: `${provider.name}/${m.id}`,
+        provider: provider.name
+      }));
+
+      allModels.push(...prefixedModels);
+    } catch (err) {
+      console.error(`[${new Date().toISOString()}] Failed to fetch models from ${provider.name}:`, err);
+    }
+  }
+
+  return allModels;
+}
+
+const PARAM_SCORES = [
+  { min: 70, score: 20, label: '大参数' },
+  { min: 30, score: 15, label: '中参数' },
+  { min: 13, score: 10, label: '标准参数' },
+  { min: 7, score: 5, label: '轻量参数' },
+  { min: 0, score: 2, label: '小参数' }
 ];
 
 export function extractParameterScore(name: string): { score: number; reason?: string } {
@@ -69,18 +121,8 @@ export function extractParameterScore(name: string): { score: number; reason?: s
   if (!match) return { score: 0 };
 
   const params = parseFloat(match[1]);
-
-  if (params >= 70) {
-    return { score: 20, reason: `大参数(${params}B)` };
-  } else if (params >= 30) {
-    return { score: 15, reason: `中参数(${params}B)` };
-  } else if (params >= 13) {
-    return { score: 10, reason: `标准参数(${params}B)` };
-  } else if (params >= 7) {
-    return { score: 5, reason: `轻量参数(${params}B)` };
-  }
-
-  return { score: 2, reason: `小参数(${params}B)` };
+  const config = PARAM_SCORES.find(p => params >= p.min)!;
+  return { score: config.score, reason: `${config.label}(${params}B)` };
 }
 
 export function rankModels(models: OpenRouterModel[]): ModelScore[] {

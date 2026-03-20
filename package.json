@@ -24,7 +24,8 @@
     "dotenv": "^16.4.5",
     "hono": "^4.2.9",
     "tsx": "^4.9.0",
-    "typescript": "^5.4.5"
+    "typescript": "^5.4.5",
+    "undici": "^7.24.5"
   },
   "devDependencies": {
     "@types/jest": "^30.0.0",

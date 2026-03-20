@@ -1,9 +1,11 @@
-import { ENV, fetchWithTimeout } from './config';
-import { fetchModels, filterFreeModels, rankModels, OpenRouterModel } from './models';
+import { ENV, fetchWithTimeout, getProviderKey } from './config';
+import { fetchAllModels, filterFreeModels, rankModels, OpenRouterModel } from './models';
+import { PROVIDERS } from './providers/registry';
 
 export interface CandidateModel {
   id: string;
   name: string;
+  provider: string;
   context_length?: number;
   lastValidated?: number;
   successCount?: number;
@@ -52,19 +54,33 @@ export class CandidatePool {
     this.validating = true;
 
     try {
-      const models = await fetchModels();
-      const freeModels = filterFreeModels(models);
-      const ranked = rankModels(freeModels);
+      // 获取所有已配置 provider 的模型
+      const allModels = await fetchAllModels();
+      
+      // 过滤免费模型
+      const freeModels = allModels.filter(model => {
+        const promptCost = parseFloat(String(model.pricing?.prompt || '0'));
+        const completionCost = parseFloat(String(model.pricing?.completion || '0'));
+        return promptCost === 0 && completionCost === 0;
+      });
 
       this.candidates.clear();
 
-      for (const { model } of ranked) {
-        const isValid = await this.validateModel(model.id);
+      // 验证每个模型
+      for (const model of freeModels) {
+        const provider = PROVIDERS.find(p => p.name === model.provider);
+        if (!provider) continue;
+
+        const key = getProviderKey(model.provider);
+        if (!key) continue;
+
+        const isValid = await this.validateModelWithProvider(model.id, provider, key);
         
         if (isValid) {
           this.candidates.set(model.id, {
             id: model.id,
             name: model.name,
+            provider: model.provider,
             context_length: model.context_length,
             lastValidated: Date.now(),
             successCount: 1,
@@ -76,6 +92,35 @@ export class CandidatePool {
       this.lastUpdateTime = Date.now();
     } finally {
       this.validating = false;
+    }
+  }
+
+  private async validateModelWithProvider(
+    modelId: string, 
+    provider: typeof PROVIDERS[0], 
+    key: string
+  ): Promise<boolean> {
+    try {
+      const response = await fetchWithTimeout(
+        `${provider.baseURL}/chat/completions`,
+        {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${key}`,
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({
+            model: modelId.replace(`${provider.name}/`, ''), // 去掉 provider 前缀
+            messages: [{ role: 'user', content: 'test' }],
+            max_tokens: 1
+          })
+        },
+        15000
+      );
+
+      return response.status === 200;
+    } catch {
+      return false;
     }
   }
 

@@ -1,14 +1,36 @@
 import { readFile, writeFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import dotenv from 'dotenv';
+import { fetch as undiciFetch, ProxyAgent } from 'undici';
 
 dotenv.config();
+
+// 自动检测并配置 HTTP 代理
+const proxyUrl = process.env.https_proxy || process.env.http_proxy || process.env.HTTPS_PROXY || process.env.HTTP_PROXY;
+const proxyAgent = proxyUrl ? new ProxyAgent(proxyUrl) : null;
+
+// 文件写入锁，防止并发写入冲突
+let writeLock = Promise.resolve();
 
 const ENV_PATH = '.env';
 
 export interface Config {
   default_model: string;
   preferred_model?: string;
+  customProviders?: CustomProvider[];
+  customModels?: CustomModel[];
+}
+
+export interface CustomProvider {
+  name: string;
+  baseURL: string;
+  apiKey: string;
+}
+
+export interface CustomModel {
+  provider: string;
+  modelId: string;
+  addedAt: number;
 }
 
 const CONFIG_PATH = 'config.json';
@@ -49,8 +71,114 @@ export async function setConfig(config: Partial<Config>): Promise<Config> {
 export const ENV = {
   OPENROUTER_API_KEY: process.env.OPENROUTER_API_KEY || '',
   OPENROUTER_BASE_URL: process.env.OPENROUTER_BASE_URL || 'https://openrouter.ai/api/v1',
+  GROQ_API_KEY: process.env.GROQ_API_KEY || '',
+  OPENCODE_API_KEY: process.env.OPENCODE_API_KEY || '',
   PORT: Number(process.env.PORT) || 8765
 };
+
+const PROVIDER_ENV_MAP: Record<string, string> = {
+  openrouter: 'OPENROUTER_API_KEY',
+  groq: 'GROQ_API_KEY',
+  opencode: 'OPENCODE_API_KEY'
+};
+
+export function getProviderKey(provider: string): string | undefined {
+  const envKey = PROVIDER_ENV_MAP[provider];
+  if (!envKey) return undefined;
+  return process.env[envKey];
+}
+
+export interface MultiProviderKeyStatus {
+  [provider: string]: {
+    configured: boolean;
+    masked: string | null;
+  };
+}
+
+async function getProviderStatus(provider: string): Promise<{ configured: boolean; masked: string | null }> {
+  const key = getProviderKey(provider);
+  if (key) {
+    return { configured: true, masked: maskApiKey(key) };
+  }
+
+  if (!existsSync(ENV_PATH)) {
+    return { configured: false, masked: null };
+  }
+
+  const content = await readFile(ENV_PATH, 'utf-8');
+  const envKey = PROVIDER_ENV_MAP[provider];
+  const match = content.match(new RegExp(`${envKey}=(.+)`));
+  return {
+    configured: !!match,
+    masked: match ? maskApiKey(match[1].trim()) : null
+  };
+}
+
+export async function getAllProviderKeysStatus(): Promise<MultiProviderKeyStatus> {
+  const providers = ['openrouter', 'groq', 'opencode'];
+  const status: MultiProviderKeyStatus = {};
+
+  for (const provider of providers) {
+    status[provider] = await getProviderStatus(provider);
+  }
+
+  return status;
+}
+
+export async function saveProviderKey(provider: string, key: string): Promise<void> {
+  if (!key || key.trim().length === 0) {
+    throw new Error('API key cannot be empty');
+  }
+
+  const trimmedKey = key.trim();
+  const envKey = PROVIDER_ENV_MAP[provider];
+
+  if (!envKey) {
+    throw new Error(`Unknown provider: ${provider}`);
+  }
+
+  // 使用锁确保串行写入
+  writeLock = writeLock.then(async () => {
+    const keyLine = `${envKey}=${trimmedKey}`;
+    const fileExists = existsSync(ENV_PATH);
+
+    if (fileExists) {
+      const content = await readFile(ENV_PATH, 'utf-8');
+      const lines = content.split('\n').filter(line => line && !line.startsWith(`${envKey}=`));
+      lines.push(keyLine);
+      await writeFile(ENV_PATH, lines.join('\n') + '\n', 'utf-8');
+    } else {
+      await writeFile(ENV_PATH, keyLine + '\n', 'utf-8');
+    }
+  });
+
+  await writeLock;
+  process.env[envKey] = trimmedKey;
+}
+
+export async function saveCustomProvider(provider: CustomProvider): Promise<void> {
+  const config = await getConfig();
+  const customProviders = config.customProviders || [];
+  const existingIndex = customProviders.findIndex(p => p.name === provider.name);
+  if (existingIndex >= 0) {
+    customProviders[existingIndex] = provider;
+  } else {
+    customProviders.push(provider);
+  }
+  await setConfig({ ...config, customProviders });
+}
+
+export async function saveCustomModel(model: CustomModel): Promise<void> {
+  const config = await getConfig();
+  const customModels = config.customModels || [];
+  const existingIndex = customModels.findIndex(m => m.provider === model.provider && m.modelId === model.modelId);
+  if (existingIndex >= 0) {
+    customModels[existingIndex] = model;
+  } else {
+    customModels.push(model);
+  }
+  await setConfig({ ...config, customModels });
+}
 
 export interface ApiKeyStatus {
   configured: boolean;
@@ -61,11 +189,14 @@ export function maskApiKey(key: string | null): string | null {
   if (!key) {
     return null;
   }
-  const remaining = key.slice(3);
+  const prefixLen = key.startsWith('sk-or-') ? 6 :
+                     key.startsWith('gsk-') ? 4 : 3;
+  const prefix = key.slice(0, prefixLen);
+  const remaining = key.slice(prefixLen);
   if (remaining.length <= 3) {
-    return `sk-****${remaining}`;
+    return `${prefix}***${remaining}`;
   }
-  return `sk-****${remaining.slice(-3)}`;
+  return `${prefix}***${remaining.slice(-3)}`;
 }
 
 export async function saveApiKey(key: string): Promise<void> {
@@ -116,7 +247,20 @@ export async function fetchWithTimeout(
 ): Promise<Response> {
   const controller = new AbortController();
   const id = setTimeout(() => controller.abort(), timeout);
+  
   try {
+    // 如果有代理配置，使用 undici 的 fetch
+    if (proxyAgent) {
+      const undiciOptions: any = {
+        method: options.method,
+        headers: options.headers,
+        body: options.body,
+        dispatcher: proxyAgent,
+        signal: controller.signal
+      };
+      return await undiciFetch(url, undiciOptions) as unknown as Response;
+    }
+    // 否则使用原生 fetch
     return await fetch(url, { ...options, signal: controller.signal });
   } finally {
     clearTimeout(id);

@@ -1,11 +1,66 @@
 import { isModelRateLimited, markModelRateLimited } from './rate-limit';
-import { fetchModels, filterFreeModels, rankModels } from './models';
+import { fetchAllModels } from './models';
+import type { Model } from './providers/types';
 
 export interface FallbackResult {
   model: string;
   is_fallback: boolean;
   attempted_models: string[];
   fallback_reason?: string;
+}
+
+// 模型可用性状态（内存中，重启重置）
+// 1 = 可用，0 = 最近失败过
+const modelAvailability = new Map<string, number>();
+
+function isModelAvailable(modelId: string): boolean {
+  return (modelAvailability.get(modelId) ?? 1) === 1;
+}
+
+function markModelAvailable(modelId: string): void {
+  modelAvailability.set(modelId, 1);
+}
+
+function markModelUnavailable(modelId: string): void {
+  modelAvailability.set(modelId, 0);
+}
+
+const PROVIDER_TRUST_SCORES: Record<string, number> = {
+  google: 30, 'meta-llama': 30, mistralai: 30, deepseek: 30,
+  nvidia: 30, qwen: 30, groq: 30, opencode: 20
+};
+
+const PARAM_SCALE_SCORES = [
+  { min: 70, score: 30 },
+  { min: 30, score: 25 },
+  { min: 13, score: 15 },
+  { min: 7, score: 10 },
+  { min: 0, score: 5 }
+];
+
+function calculateModelScore(model: Model): number {
+  let score = 0;
+  
+  score += Math.min((model.context_length || 0) / 32000, 1) * 40;
+  
+  const paramMatch = model.name.match(/(\d+(?:\.\d+)?)\s*[bB]\b/);
+  if (paramMatch) {
+    const params = parseFloat(paramMatch[1]);
+    const paramConfig = PARAM_SCALE_SCORES.find(p => params >= p.min)!;
+    score += paramConfig.score;
+  }
+  
+  score += PROVIDER_TRUST_SCORES[model.provider] || 10;
+  
+  return isModelAvailable(model.id) ? score : 0;
+}
+
+function rankAllModels(models: Model[]): { model: Model; score: number; available: boolean }[] {
+  return models.map(model => ({
+    model,
+    score: Math.round(calculateModelScore(model)),
+    available: isModelAvailable(model.id)
+  })).sort((a, b) => b.score - a.score);
 }
 
 export async function getFallbackChain(preferredModel?: string): Promise<string[]> {
@@ -16,11 +71,26 @@ export async function getFallbackChain(preferredModel?: string): Promise<string[
   }
 
   try {
-    const models = await fetchModels();
-    const freeModels = filterFreeModels(models);
-    const ranked = rankModels(freeModels);
+    // 获取所有 provider 的模型
+    const allModels = await fetchAllModels();
+    
+    // 过滤免费模型
+    const freeModels = allModels.filter(m => {
+      // OpenCode 特殊处理：只保留带 -free 后缀的模型
+      if (m.provider === 'opencode') {
+        return m.id.endsWith('-free') || m.id.includes('-free-');
+      }
+      
+      // 其他 provider：按 pricing 判断
+      const prompt = parseFloat(String(m.pricing?.prompt || '0'));
+      const completion = parseFloat(String(m.pricing?.completion || '0'));
+      return prompt === 0 && completion === 0;
+    });
+    
+    const ranked = rankAllModels(freeModels);
 
     for (const { model } of ranked) {
+      // model.id 已经是 provider/model 格式（来自 fetchAllModels）
       if (!chain.includes(model.id)) {
         chain.push(model.id);
       }
@@ -29,8 +99,8 @@ export async function getFallbackChain(preferredModel?: string): Promise<string[
     console.error('[Fallback] Failed to get fallback models:', err);
   }
 
-  if (!chain.includes('openrouter/free')) {
-    chain.push('openrouter/free');
+  if (!chain.includes('openrouter/auto:free')) {
+    chain.push('openrouter/auto:free');
   }
 
   return chain;
@@ -54,6 +124,12 @@ export async function executeWithFallback<T>(
     const { success, response, error } = await execute(model);
 
     if (success && response) {
+      // 模型成功，标记为可用
+      if (!isModelAvailable(model)) {
+        markModelAvailable(model);
+        console.log(`[Fallback] ${model} recovered and now available`);
+      }
+      
       if (model !== preferredModel) {
         console.log(`[Fallback] ${preferredModel || 'default'} failed, using ${model}`);
       }
@@ -70,6 +146,8 @@ export async function executeWithFallback<T>(
       };
     }
 
+    // 模型失败，标记为不可用
+    markModelUnavailable(model);
     attemptedModels.push(model);
 
     if (isFirstAttempt && chain.length > 1) {
@@ -77,6 +155,7 @@ export async function executeWithFallback<T>(
       isFirstAttempt = false;
     }
 
+    // 同时更新 rate-limit 状态（用于持久化记录）
     if (error?.status === 429) {
       await markModelRateLimited(model, 'rate_limit', error.retry_after);
     } else if (error?.status === 503) {
@@ -84,5 +163,5 @@ export async function executeWithFallback<T>(
     }
   }
 
-  throw new Error(`All models failed. Attempted: ${attemptedModels.join(', ')}`);
+  throw new Error('无可用模型，请稍后再试');
 }

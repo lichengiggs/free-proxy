@@ -3,14 +3,13 @@ import { Hono } from 'hono';
 import { cors } from 'hono/cors';
 import { serveStatic } from '@hono/node-server/serve-static';
 import { stream } from 'hono/streaming';
-import { getConfig, setConfig, ENV, fetchWithTimeout, saveApiKey, getApiKeyStatus } from './config';
-import { fetchModels, filterFreeModels, rankModels } from './models';
+import { getConfig, setConfig, ENV, fetchWithTimeout, saveApiKey, getApiKeyStatus, getProviderKey, saveProviderKey, getAllProviderKeysStatus, saveCustomProvider, saveCustomModel, CustomProvider, CustomModel } from './config';
+import { fetchModels, filterFreeModels, rankModels, fetchAllModels } from './models';
 import { executeWithFallback } from './fallback';
 import { detectOpenClawConfig, mergeConfig, listBackups, restoreBackup } from './openclaw-config';
-import { CandidatePool } from './candidate-pool';
+import { PROVIDERS } from './providers/registry';
 
 const app = new Hono();
-const candidatePool = new CandidatePool();
 
 export { app, getConfig, setConfig };
 
@@ -30,6 +29,26 @@ app.use('/*', serveStatic({
   index: 'index.html'
 }));
 
+// 解析模型 ID，返回 provider 和实际模型名
+function parseModelId(modelId: string): { provider: string; model: string } {
+  const parts = modelId.split('/');
+  if (parts.length >= 2 && ['openrouter', 'groq', 'opencode'].includes(parts[0])) {
+    return { provider: parts[0], model: parts.slice(1).join('/') };
+  }
+  // 默认使用 openrouter
+  return { provider: 'openrouter', model: modelId };
+}
+
+const PROVIDER_CONFIGS: Record<string, { baseURL: string; apiKeyEnv: string }> = {
+  openrouter: { baseURL: ENV.OPENROUTER_BASE_URL, apiKeyEnv: 'OPENROUTER_API_KEY' },
+  groq: { baseURL: 'https://api.groq.com/openai/v1', apiKeyEnv: 'GROQ_API_KEY' },
+  opencode: { baseURL: 'https://opencode.ai/zen/v1', apiKeyEnv: 'OPENCODE_API_KEY' }
+};
+
+function getProviderConfig(provider: string) {
+  return PROVIDER_CONFIGS[provider];
+}
+
 // 1. Chat Completions 接口
 app.post('/v1/chat/completions', async (c) => {
   try {
@@ -40,14 +59,30 @@ app.post('/v1/chat/completions', async (c) => {
     const result = await executeWithFallback(
       config.default_model,
       async (modelToTry) => {
-        body.model = modelToTry;
+        const { provider, model } = parseModelId(modelToTry);
+        const providerConfig = getProviderConfig(provider);
+        
+        if (!providerConfig) {
+          return { success: false, error: { message: `Unknown provider: ${provider}` } };
+        }
+
+        const apiKey = process.env[providerConfig.apiKeyEnv];
+        if (!apiKey) {
+          return { success: false, error: { message: `API key not configured for ${provider}` } };
+        }
+
+        body.model = model;
 
         const proxyHeaders: Record<string, string> = {
-          'Authorization': `Bearer ${ENV.OPENROUTER_API_KEY}`,
-          'HTTP-Referer': 'http://localhost:8765',
-          'X-Title': 'OpenRouter Free Proxy',
+          'Authorization': `Bearer ${apiKey}`,
           'Content-Type': 'application/json'
         };
+
+        // OpenRouter 需要额外 headers
+        if (provider === 'openrouter') {
+          proxyHeaders['HTTP-Referer'] = 'http://localhost:8765';
+          proxyHeaders['X-Title'] = 'OpenRouter Free Proxy';
+        }
 
         Object.entries(headers).forEach(([key, value]) => {
           if (!['host', 'content-length', 'authorization'].includes(key.toLowerCase())) {
@@ -57,7 +92,7 @@ app.post('/v1/chat/completions', async (c) => {
 
         try {
           const response = await fetchWithTimeout(
-            `${ENV.OPENROUTER_BASE_URL}/chat/completions`,
+            `${providerConfig.baseURL}/chat/completions`,
             {
               method: 'POST',
               headers: proxyHeaders,
@@ -130,30 +165,53 @@ app.post('/v1/chat/completions', async (c) => {
   }
 });
 
-// 2. 获取模型列表（只返回验证可用的）
+// 2. 获取模型列表（直接返回所有可用模型，不验证）
 app.get('/admin/models', async (c) => {
   try {
-    const forceRefresh = c.req.query('refresh') === 'true';
+    // 检查是否有任何 provider 配置了 API Key
+    const { getAllProviderKeysStatus } = await import('./config');
+    const keyStatus = await getAllProviderKeysStatus();
+    const hasAnyKey = Object.values(keyStatus).some(s => s.configured);
     
-    if (forceRefresh || candidatePool.getCandidates().length === 0) {
-      await candidatePool.refresh();
+    if (!hasAnyKey) {
+      return c.json({
+        models: [],
+        current: 'none',
+        recommended: null,
+        total_available: 0,
+        message: '请先配置至少一个 Provider 的 API Key'
+      });
     }
     
-    const candidates = candidatePool.getCandidates();
+    // 直接从所有 provider 获取模型列表（不验证可用性）
+    const allModels = await fetchAllModels();
+    
+    // 过滤免费模型
+    const freeModels = allModels.filter(m => {
+      // OpenCode 特殊处理：只保留带 -free 后缀的模型
+      if (m.provider === 'opencode') {
+        return m.id.endsWith('-free') || m.id.includes('-free-');
+      }
+      
+      // 其他 provider：按 pricing 判断
+      const prompt = parseFloat(String(m.pricing?.prompt || '0'));
+      const completion = parseFloat(String(m.pricing?.completion || '0'));
+      return prompt === 0 && completion === 0;
+    });
+    
     const config = await getConfig();
 
     return c.json({
-      models: candidates.map(candidate => ({
-        id: candidate.id,
-        name: candidate.name,
-        context_length: candidate.context_length || 0,
-        is_recommended: true,
-        last_validated: candidate.lastValidated
+      models: freeModels.map(model => ({
+        id: model.id,
+        name: model.name,
+        provider: model.provider,
+        context_length: model.context_length || 0,
+        is_recommended: false
       })),
       current: config.default_model,
-      recommended: candidates[0]?.id,
-      total_available: candidates.length,
-      last_update: candidatePool.getLastUpdateTime()
+      recommended: freeModels[0]?.id || null,
+      total_available: freeModels.length
     });
   } catch (err: any) {
     console.error('Error fetching models:', err);
@@ -235,6 +293,135 @@ app.post('/api/validate-key', async (c) => {
 app.get('/api/validate-key', async (c) => {
   const status = await getApiKeyStatus();
   return c.json(status);
+});
+
+// 5.1 获取所有 Provider Key 状态
+app.get('/api/provider-keys', async (c) => {
+  const status = await getAllProviderKeysStatus();
+  return c.json(status);
+});
+
+// 5.2 保存 Provider Key
+app.post('/api/provider-keys', async (c) => {
+  try {
+    const { provider, apiKey } = await c.req.json();
+
+    if (!provider || !apiKey) {
+      return c.json({ success: false, error: 'Provider and API key are required' }, 400);
+    }
+
+    if (!['openrouter', 'groq', 'opencode'].includes(provider)) {
+      return c.json({ success: false, error: 'Unknown provider' }, 400);
+    }
+
+    const config = PROVIDER_CONFIGS[provider];
+
+    try {
+      // 使用 /models 端点验证 API Key（更轻量，无需指定模型）
+      const response = await fetchWithTimeout(`${config.baseURL}/models`, {
+        headers: { 'Authorization': `Bearer ${apiKey}` }
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({ error: { message: 'Unknown error' } }));
+        const errorMsg = errorData.error?.message || `HTTP ${response.status}`;
+        
+        if (response.status === 401) {
+          return c.json({ success: false, error: 'Invalid API key' }, 401);
+        }
+        if (response.status === 429) {
+          return c.json({ success: false, error: 'Rate limit exceeded, please try again later' }, 429);
+        }
+        return c.json({ success: false, error: `API error: ${errorMsg}` }, response.status as 400 | 401 | 403 | 404 | 429 | 500);
+      }
+
+      await saveProviderKey(provider, apiKey);
+
+      const { maskApiKey } = await import('./config');
+      return c.json({ success: true, masked: maskApiKey(apiKey) });
+    } catch (err: any) {
+      if (err.name === 'AbortError') {
+        return c.json({ success: false, error: 'Connection timeout, please check your network' }, 500);
+      }
+      return c.json({ success: false, error: `Connection failed: ${err.message}` }, 500);
+    }
+  } catch (err: any) {
+    return c.json({ success: false, error: 'Server error' }, 500);
+  }
+});
+
+// 5.3 添加自定义 Provider
+app.post('/api/custom-providers', async (c) => {
+  try {
+    const { name, baseURL, apiKey } = await c.req.json();
+
+    if (!name || !baseURL || !apiKey) {
+      return c.json({ success: false, error: 'Name, baseURL and apiKey are required' }, 400);
+    }
+
+    try {
+      const response = await fetchWithTimeout(`${baseURL}/models`, {
+        headers: { 'Authorization': `Bearer ${apiKey}` }
+      });
+
+      if (!response.ok) {
+        return c.json({ success: false, error: 'Failed to connect to provider' }, 400);
+      }
+
+      await saveCustomProvider({ name, baseURL, apiKey });
+
+      return c.json({ success: true, name });
+    } catch (err) {
+      return c.json({ success: false, error: 'Network error' }, 500);
+    }
+  } catch (err: any) {
+    return c.json({ success: false, error: 'Server error' }, 500);
+  }
+});
+
+// 5.4 添加自定义模型
+app.post('/api/custom-models', async (c) => {
+  try {
+    const { provider, modelId } = await c.req.json();
+
+    if (!provider || !modelId) {
+      return c.json({ success: false, error: 'Provider and modelId are required' }, 400);
+    }
+
+    const key = getProviderKey(provider);
+    const providerConfig = PROVIDERS.find(p => p.name === provider);
+
+    if (!key || !providerConfig) {
+      return c.json({ success: false, error: 'Provider not configured' }, 400);
+    }
+
+    try {
+      const response = await fetchWithTimeout(`${providerConfig.baseURL}/chat/completions`, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${key}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          model: modelId,
+          messages: [{ role: 'user', content: 'test' }],
+          max_tokens: 1
+        })
+      });
+
+      if (!response.ok) {
+        return c.json({ success: false, error: 'Model not available' }, 400);
+      }
+
+      await saveCustomModel({ provider, modelId, addedAt: Date.now() });
+
+      return c.json({ success: true, model: modelId });
+    } catch (err) {
+      return c.json({ success: false, error: 'Network error' }, 500);
+    }
+  } catch (err: any) {
+    return c.json({ success: false, error: 'Server error' }, 500);
+  }
 });
 
 // 6. 检测 OpenClaw 配置
