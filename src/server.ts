@@ -4,11 +4,11 @@ import { cors } from 'hono/cors';
 import { serveStatic } from '@hono/node-server/serve-static';
 import { stream } from 'hono/streaming';
 import { getConfig, setConfig, ENV, fetchWithTimeout, saveApiKey, getApiKeyStatus, getProviderKey, saveProviderKey, getAllProviderKeysStatus, saveCustomProvider, saveCustomModel, getCustomModels, deleteCustomModel } from './config';
-import { fetchModels, filterFreeModels, rankModels, fetchAllModels } from './models';
+import { fetchModels, filterFreeModels, rankModels, fetchAllModels, normalizeProviderModels } from './models';
 import { executeWithFallback } from './fallback';
 import { detectOpenClawConfig, mergeConfig, listBackups, restoreBackup } from './openclaw-config';
-import { PROVIDERS } from './providers/registry';
-import { validateProviderKey, verifyModelAvailability, type VerifyReason } from './provider-health';
+import { PROVIDERS, isKnownProvider } from './providers/registry';
+import { validateProviderKey, validateProviderKeyWithKey, verifyModelAvailability, type VerifyReason, buildProviderHeaders, normalizeVerificationModelId } from './provider-health';
 
 const app = new Hono();
 
@@ -36,21 +36,42 @@ app.use('/*', serveStatic({
 // 解析模型 ID，返回 provider 和实际模型名
 function parseModelId(modelId: string): { provider: string; model: string } {
   const parts = modelId.split('/');
-  if (parts.length >= 2 && ['openrouter', 'groq', 'opencode'].includes(parts[0])) {
+  if (parts.length >= 2 && isKnownProvider(parts[0])) {
     return { provider: parts[0], model: parts.slice(1).join('/') };
   }
   // 默认使用 openrouter
   return { provider: 'openrouter', model: modelId };
 }
 
-const PROVIDER_CONFIGS: Record<string, { baseURL: string; apiKeyEnv: string }> = {
-  openrouter: { baseURL: ENV.OPENROUTER_BASE_URL, apiKeyEnv: 'OPENROUTER_API_KEY' },
-  groq: { baseURL: 'https://api.groq.com/openai/v1', apiKeyEnv: 'GROQ_API_KEY' },
-  opencode: { baseURL: 'https://opencode.ai/zen/v1', apiKeyEnv: 'OPENCODE_API_KEY' }
-};
+const PROVIDER_CONFIGS: Record<string, { baseURL: string; apiKeyEnv: string }> = Object.fromEntries(
+  PROVIDERS.map(provider => [
+    provider.name,
+    {
+      baseURL: provider.name === 'openrouter' ? ENV.OPENROUTER_BASE_URL : provider.baseURL,
+      apiKeyEnv: provider.apiKeyEnv
+    }
+  ])
+);
 
 function getProviderConfig(provider: string) {
   return PROVIDER_CONFIGS[provider];
+}
+
+function sanitizeOutgoingHeaders(provider: string, headers: Record<string, string>): Record<string, string> {
+  const sanitized: Record<string, string> = {};
+
+  const forwarded = ['accept', 'accept-language'];
+  for (const header of forwarded) {
+    const value = headers[header];
+    if (value) sanitized[header] = value;
+  }
+
+  if (provider === 'openrouter') {
+    const userAgent = headers['user-agent'];
+    if (userAgent) sanitized['user-agent'] = userAgent;
+  }
+
+  return sanitized;
 }
 
 function verifyReasonToMessage(reason?: VerifyReason): string | undefined {
@@ -60,15 +81,58 @@ function verifyReasonToMessage(reason?: VerifyReason): string | undefined {
   return '模型不可用或当前 provider 暂不可用';
 }
 
+const verificationStatus = new Map<string, { verified: boolean; reason?: VerifyReason; lastCheckedAt: number; pending?: boolean }>();
+let verifyingInBackground = false;
+
+function startBackgroundModelVerification(models: Array<{ id: string; provider: string }>): void {
+  if (verifyingInBackground) return;
+  const pending = models.filter(model => {
+    const status = verificationStatus.get(model.id);
+    return !status || Date.now() - status.lastCheckedAt > 10 * 60 * 1000;
+  });
+  if (!pending.length) return;
+
+  for (const model of pending) {
+    verificationStatus.set(model.id, {
+      verified: false,
+      pending: true,
+      lastCheckedAt: Date.now()
+    });
+  }
+
+  verifyingInBackground = true;
+  void (async () => {
+    try {
+      for (const model of pending) {
+        const parsed = parseModelId(model.id);
+        const availability = await verifyModelAvailability(parsed.provider, parsed.model);
+        verificationStatus.set(model.id, {
+          verified: availability.verified,
+          reason: availability.reason,
+          lastCheckedAt: availability.lastCheckedAt,
+          pending: false
+        });
+      }
+    } finally {
+      verifyingInBackground = false;
+    }
+  })();
+}
+
 // 1. Chat Completions 接口
 app.post('/v1/chat/completions', async (c) => {
   try {
     const body = await c.req.json();
-    const headers = Object.fromEntries(c.req.raw.headers.entries());
+    const headers = Object.fromEntries(
+      Array.from(c.req.raw.headers.entries()).map(([key, value]) => [key.toLowerCase(), value])
+    );
     const config = await getConfig();
+    const preferredModel = typeof body?.model === 'string' && body.model.trim().length > 0
+      ? body.model
+      : config.default_model;
 
     const result = await executeWithFallback(
-      config.default_model,
+      preferredModel,
       async (modelToTry) => {
         const { provider, model } = parseModelId(modelToTry);
         const providerConfig = getProviderConfig(provider) || (() => {
@@ -92,24 +156,12 @@ app.post('/v1/chat/completions', async (c) => {
           return { success: false, error: { message: `API key not configured for ${provider}` } };
         }
 
-        body.model = model;
+        body.model = normalizeVerificationModelId(provider, model);
 
         const proxyHeaders: Record<string, string> = {
-          'Authorization': `Bearer ${apiKey}`,
-          'Content-Type': 'application/json'
+          ...buildProviderHeaders(provider, apiKey),
+          ...sanitizeOutgoingHeaders(provider, headers)
         };
-
-        // OpenRouter 需要额外 headers
-        if (provider === 'openrouter') {
-          proxyHeaders['HTTP-Referer'] = 'http://localhost:8765';
-          proxyHeaders['X-Title'] = 'OpenRouter Free Proxy';
-        }
-
-        Object.entries(headers).forEach(([key, value]) => {
-          if (!['host', 'content-length', 'authorization'].includes(key.toLowerCase())) {
-            proxyHeaders[key] = value;
-          }
-        });
 
         try {
           const response = await fetchWithTimeout(
@@ -208,12 +260,21 @@ app.get('/admin/models', async (c) => {
 
     // 直接从所有 provider 获取模型列表
     const allModels = await fetchAllModels();
+    const githubModels = allModels.filter(m => m.provider === 'github');
+    const opencodeModels = allModels.filter(m => m.provider === 'opencode');
     
     // 过滤免费模型
     const freeModels = allModels.filter(m => {
       // OpenCode 特殊处理：只保留带 -free 后缀的模型
       if (m.provider === 'opencode') {
         return m.id.endsWith('-free') || m.id.includes('-free-');
+      }
+
+      const providerMeta = PROVIDERS.find(p => p.name === m.provider);
+
+      // 除 OpenRouter 外，标记为免费 provider 的模型默认展示
+      if (m.provider !== 'openrouter' && providerMeta?.isFree) {
+        return true;
       }
       
       // 其他 provider：按 pricing 判断
@@ -222,35 +283,61 @@ app.get('/admin/models', async (c) => {
       return prompt === 0 && completion === 0;
     });
 
-    const verifiedMap = new Map<string, { verified: boolean; reason?: VerifyReason; lastCheckedAt: number }>();
-    if (shouldRefresh) {
-      await Promise.all(freeModels.map(async (model) => {
-        const parsed = parseModelId(model.id);
-        const availability = await verifyModelAvailability(parsed.provider, parsed.model);
-        verifiedMap.set(model.id, {
-          verified: availability.verified,
-          reason: availability.reason,
-          lastCheckedAt: availability.lastCheckedAt
-        });
-      }));
+    const hasOpenRouterEntry = freeModels.some(model => model.id === 'openrouter/auto:free');
+    if (!hasOpenRouterEntry) {
+      freeModels.unshift({
+        id: 'openrouter/auto:free',
+        name: 'openrouter/auto:free',
+        provider: 'openrouter',
+        pricing: { prompt: '0', completion: '0' }
+      });
     }
+
+    if (!freeModels.some(m => m.provider === 'github') && githubModels.length) {
+      const preferred = githubModels.find(m => m.id.includes('gpt-4o-mini')) || githubModels.find(m => m.id.includes('gpt-4o')) || githubModels[0];
+      if (preferred) freeModels.push(preferred);
+    }
+
+    if (!freeModels.some(m => m.provider === 'opencode') && opencodeModels.length) {
+      const preferred = opencodeModels.find(m => m.id.includes('free')) || opencodeModels[0];
+      if (preferred) freeModels.push(preferred);
+    }
+
+    if (!freeModels.some(m => m.provider === 'opencode')) {
+      freeModels.push({
+        id: 'opencode/mimo-v2-pro-free',
+        name: 'MiMo V2 Pro Free',
+        provider: 'opencode',
+        pricing: { prompt: '0', completion: '0' }
+      });
+    }
+
+    if (shouldRefresh) {
+      verificationStatus.clear();
+    }
+    startBackgroundModelVerification(freeModels);
     
     const config = await getConfig();
 
+    const displayModels = normalizeProviderModels(freeModels);
+
     return c.json({
-      models: freeModels.map(model => ({
+      models: displayModels.map(model => ({
         id: model.id,
-        name: model.name,
+        name: model.provider === 'gemini' ? 'Gemini 2.5 Flash' : model.name,
         provider: model.provider,
         context_length: model.context_length || 0,
         is_recommended: false,
-        verified: verifiedMap.get(model.id)?.verified,
-        verify_reason: verifyReasonToMessage(verifiedMap.get(model.id)?.reason),
-        last_checked_at: verifiedMap.get(model.id)?.lastCheckedAt
+        verified: verificationStatus.get(model.id)?.pending ? undefined : verificationStatus.get(model.id)?.verified,
+        verify_reason: verificationStatus.get(model.id)?.pending
+          ? '正在验证模型'
+          : verifyReasonToMessage(verificationStatus.get(model.id)?.reason),
+        last_checked_at: verificationStatus.get(model.id)?.lastCheckedAt
       })),
       current: config.default_model,
-      recommended: freeModels[0]?.id || null,
-      total_available: freeModels.length
+      recommended: displayModels[0]?.id || null,
+      total_available: displayModels.length,
+      validating: verifyingInBackground
     });
   } catch (err: any) {
     console.error('Error fetching models:', err);
@@ -349,32 +436,27 @@ app.post('/api/provider-keys', async (c) => {
       return c.json({ success: false, error: 'Provider and API key are required' }, 400);
     }
 
-    if (!['openrouter', 'groq', 'opencode'].includes(provider)) {
+    if (!Object.prototype.hasOwnProperty.call(PROVIDER_CONFIGS, provider)) {
       return c.json({ success: false, error: 'Unknown provider' }, 400);
     }
 
     const config = PROVIDER_CONFIGS[provider];
 
-    try {
-      // 使用 /models 端点验证 API Key（更轻量，无需指定模型）
-      const response = await fetchWithTimeout(`${config.baseURL}/models`, {
-        headers: { 'Authorization': `Bearer ${apiKey}` }
-      });
-
-      if (!response.ok) {
-        const errorData = await response.json().catch(() => ({ error: { message: 'Unknown error' } }));
-        const errorMsg = errorData.error?.message || `HTTP ${response.status}`;
-        
-        if (response.status === 401) {
-          return c.json({ success: false, error: 'Invalid API key' }, 401);
+      try {
+        const result = await validateProviderKeyWithKey(provider, String(apiKey), config.baseURL);
+        if (!result.ok) {
+          const status = result.reason === 'auth_failed'
+            ? 401
+            : result.reason === 'network_error'
+              ? 500
+              : 400;
+          return c.json({
+            success: false,
+            error: verifyReasonToMessage(result.reason) || 'Provider validation failed'
+          }, status as 400 | 401 | 500);
         }
-        if (response.status === 429) {
-          return c.json({ success: false, error: 'Rate limit exceeded, please try again later' }, 429);
-        }
-        return c.json({ success: false, error: `API error: ${errorMsg}` }, response.status as 400 | 401 | 403 | 404 | 429 | 500);
-      }
 
-      await saveProviderKey(provider, apiKey);
+        await saveProviderKey(provider, apiKey);
 
       const { maskApiKey } = await import('./config');
       return c.json({ success: true, masked: maskApiKey(apiKey) });
@@ -437,12 +519,9 @@ app.post('/api/custom-models', async (c) => {
     try {
       const response = await fetchWithTimeout(`${providerConfig.baseURL}/chat/completions`, {
         method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${key}`,
-          'Content-Type': 'application/json'
-        },
+        headers: buildProviderHeaders(provider, key),
         body: JSON.stringify({
-          model: modelId,
+          model: normalizeVerificationModelId(provider, modelId),
           messages: [{ role: 'user', content: 'test' }],
           max_tokens: 1
         })
@@ -517,7 +596,7 @@ app.delete('/api/custom-models/:provider/:modelId', async (c) => {
 // 5.8 健康检查
 app.get('/api/health-check', async (c) => {
   const keyStatus = await getAllProviderKeysStatus();
-  const providers = ['openrouter', 'groq', 'opencode'];
+  const providers = PROVIDERS.map(provider => provider.name);
 
   const providerHealth = await Promise.all(providers.map(async (provider) => {
     const result = await validateProviderKey(provider);

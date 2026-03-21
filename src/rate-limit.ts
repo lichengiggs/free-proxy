@@ -70,6 +70,13 @@ export async function markModelRateLimited(
   await saveRateLimitState(state);
 }
 
+export async function clearModelRateLimited(modelId: string): Promise<void> {
+  const state = await loadRateLimitState();
+  if (!state[modelId]) return;
+  delete state[modelId];
+  await saveRateLimitState(state);
+}
+
 export async function cleanExpiredRateLimits(): Promise<void> {
   const state = await loadRateLimitState();
   const now = Date.now();

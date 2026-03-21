@@ -6,6 +6,11 @@ describe('Multi-Provider Model Fetching', () => {
       delete process.env.OPENROUTER_API_KEY;
       delete process.env.GROQ_API_KEY;
       delete process.env.OPENCODE_API_KEY;
+      delete process.env.GEMINI_API_KEY;
+      delete process.env.GITHUB_MODELS_API_KEY;
+      delete process.env.MISTRAL_API_KEY;
+      delete process.env.CEREBRAS_API_KEY;
+      delete process.env.SAMBANOVA_API_KEY;
       
       const models = await fetchAllModels();
       expect(models).toEqual([]);

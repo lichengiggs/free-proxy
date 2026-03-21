@@ -1,7 +1,9 @@
-import { isModelRateLimited, markModelRateLimited } from './rate-limit';
+import { isModelRateLimited, markModelRateLimited, clearModelRateLimited } from './rate-limit';
 import { fetchAllModels, isEffectivelyFreeModel } from './models';
 import { getCustomModels } from './config';
 import type { Model } from './providers/types';
+import { getLatestVerification } from './provider-health';
+import { isKnownProvider } from './providers/registry';
 
 export interface FallbackResult {
   model: string;
@@ -26,42 +28,81 @@ function markModelUnavailable(modelId: string): void {
   modelAvailability.set(modelId, 0);
 }
 
-const PROVIDER_TRUST_SCORES: Record<string, number> = {
-  google: 30, 'meta-llama': 30, mistralai: 30, deepseek: 30,
-  nvidia: 30, qwen: 30, groq: 30, opencode: 20
-};
+const WHITELIST = ['gpt-4o', 'gpt-4o-mini', 'llama-3.1-8b', 'codestral', 'deepseek', 'qwen'];
+const BLACKLIST = ['gpt-3.5', 'tiny', 'deprecated'];
 
-const PARAM_SCALE_SCORES = [
-  { min: 70, score: 30 },
-  { min: 30, score: 25 },
-  { min: 13, score: 15 },
-  { min: 7, score: 10 },
-  { min: 0, score: 5 }
-];
+function clamp(value: number, min: number, max: number): number {
+  return Math.max(min, Math.min(max, value));
+}
 
-function calculateModelScore(model: Model): number {
-  let score = 0;
-  
-  score += Math.min((model.context_length || 0) / 32000, 1) * 40;
-  
-  const paramMatch = model.name.match(/(\d+(?:\.\d+)?)\s*[bB]\b/);
-  if (paramMatch) {
-    const params = parseFloat(paramMatch[1]);
-    const paramConfig = PARAM_SCALE_SCORES.find(p => params >= p.min)!;
-    score += paramConfig.score;
-  }
-  
-  score += PROVIDER_TRUST_SCORES[model.provider] || 10;
-  
-  return isModelAvailable(model.id) ? score : 0;
+function scoreContext(model: Model): number {
+  const ctx = model.context_length || 0;
+  if (ctx >= 32000) return 10;
+  if (ctx >= 16000) return 6;
+  if (ctx >= 8000) return 3;
+  return 0;
+}
+
+function scoreSpeed(model: Model): number {
+  const id = model.id.toLowerCase();
+  if (id.includes('flash') || id.includes('lite') || model.provider === 'cerebras') return 10;
+  if (id.includes('mini') || id.includes('8b')) return 7;
+  if (id.includes('70b') || model.provider === 'sambanova') return 3;
+  return 5;
+}
+
+function scoreDomain(model: Model): number {
+  const id = model.id.toLowerCase();
+  if (id.includes('codestral') || id.includes('deepseek') || id.includes('qwen')) return 10;
+  if (id.includes('gpt-4o-mini') || id.includes('llama-3.1-8b')) return 6;
+  return 4;
+}
+
+function scoreAbility(model: Model): number {
+  const id = model.id.toLowerCase();
+  if (id.includes('70b') || id.includes('72b') || id.includes('gpt-4o') || model.provider === 'sambanova') return 20;
+  if (id.includes('32b') || id.includes('27b')) return 14;
+  if (id.includes('8b') || id.includes('mini')) return 10;
+  return 6;
+}
+
+function scoreStability(model: Model): number {
+  if (model.provider === 'openrouter' || model.provider === 'github') return 12;
+  if (model.provider === 'groq' || model.provider === 'mistral') return 11;
+  return 9;
+}
+
+function scoreModel(model: Model): number {
+  const verified = getLatestVerification(model.id)?.verified ?? false;
+  const gate = verified && isModelAvailable(model.id) ? 1 : 0;
+  const lower = model.id.toLowerCase();
+  const whitelistBonus = WHITELIST.some(name => lower.includes(name)) ? 20 : 0;
+  const blacklistPenalty = BLACKLIST.some(name => lower.includes(name)) ? 20 : 0;
+
+  const baseScore =
+    scoreStability(model) +
+    scoreAbility(model) +
+    scoreSpeed(model) +
+    scoreContext(model) +
+    scoreDomain(model) +
+    whitelistBonus -
+    blacklistPenalty;
+
+  return gate * clamp(baseScore, 0, 100);
 }
 
 function rankAllModels(models: Model[]): { model: Model; score: number; available: boolean }[] {
   return models.map(model => ({
     model,
-    score: Math.round(calculateModelScore(model)),
+    score: Math.round(scoreModel(model)),
     available: isModelAvailable(model.id)
   })).sort((a, b) => b.score - a.score);
+}
+
+function parseModelProvider(modelId: string): string | null {
+  const parts = modelId.split('/');
+  if (parts.length < 2) return null;
+  return isKnownProvider(parts[0]) ? parts[0] : null;
 }
 
 export async function getFallbackChain(preferredModel?: string): Promise<string[]> {
@@ -92,12 +133,30 @@ export async function getFallbackChain(preferredModel?: string): Promise<string[
     const freeModels = allModels.filter(m => isEffectivelyFreeModel(m));
     
     const ranked = rankAllModels(freeModels);
+    const preferredProvider = preferredModel ? parseModelProvider(preferredModel) : null;
 
-    for (const { model } of ranked) {
-      // model.id 已经是 provider/model 格式（来自 fetchAllModels）
-      if (!chain.includes(model.id)) {
-        chain.push(model.id);
+    if (preferredProvider) {
+      const sameProviderVerified = ranked
+        .filter(item => item.model.provider === preferredProvider && item.score > 0)
+        .map(item => item.model.id);
+      for (const modelId of sameProviderVerified) {
+        if (!chain.includes(modelId)) chain.push(modelId);
       }
+    }
+
+    const topVerified = ranked.find(item => item.score > 0)?.model.id;
+    if (topVerified && !chain.includes(topVerified)) {
+      chain.push(topVerified);
+    }
+
+    const otherVerified = ranked.filter(item => item.score > 0).map(item => item.model.id);
+    for (const modelId of otherVerified) {
+      if (!chain.includes(modelId)) chain.push(modelId);
+    }
+
+    const unverified = ranked.filter(item => item.score === 0).map(item => item.model.id);
+    for (const modelId of unverified) {
+      if (!chain.includes(modelId)) chain.push(modelId);
     }
   } catch (err) {
     console.error('[Fallback] Failed to get fallback models:', err);
@@ -133,6 +192,7 @@ export async function executeWithFallback<T>(
         markModelAvailable(model);
         console.log(`[Fallback] ${model} recovered and now available`);
       }
+      await clearModelRateLimited(model);
       
       if (model !== preferredModel) {
         console.log(`[Fallback] ${preferredModel || 'default'} failed, using ${model}`);

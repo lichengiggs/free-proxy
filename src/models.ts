@@ -1,6 +1,6 @@
-import { ENV, fetchWithTimeout } from './config';
+import { ENV, fetchWithTimeout, getProviderKey } from './config';
 import { PROVIDERS } from './providers/registry';
-import type { Model, ModelScore as ProviderModelScore } from './providers/types';
+import type { Model, Provider } from './providers/types';
 
 export interface OpenRouterModel {
   id: string;
@@ -16,6 +16,13 @@ export interface OpenRouterModel {
 let cachedModels: OpenRouterModel[] = [];
 let lastFetchTime = 0;
 const CACHE_TTL = 60 * 60 * 1000;
+const MULTI_PROVIDER_CACHE_TTL = 5 * 60 * 1000;
+
+const providerModelCache = new Map<string, { models: Model[]; fetchedAt: number }>();
+
+export function clearModelDiscoveryCache(): void {
+  providerModelCache.clear();
+}
 
 export async function fetchModels(forceRefresh = false): Promise<OpenRouterModel[]> {
   const now = Date.now();
@@ -68,44 +75,202 @@ const TRUSTED_PROVIDERS = [
 ];
 
 export async function fetchAllModels(): Promise<Model[]> {
-  const allModels: Model[] = [];
+  const allResults = await Promise.all(
+    PROVIDERS.map(async provider => {
+      const key = getProviderKey(provider.name);
+      if (!key) return [];
+      return fetchProviderModels(provider, key);
+    })
+  );
 
-  for (const provider of PROVIDERS) {
-    const key = process.env[provider.apiKeyEnv];
-    if (!key) continue;
+  return allResults.flat();
+}
 
-    try {
-      const response = await fetchWithTimeout(`${provider.baseURL}/models`, {
-        headers: { 'Authorization': `Bearer ${key}` }
-      });
+type RawProviderModel = {
+  id: string;
+  name?: string;
+  context_length?: number;
+  pricing?: { prompt?: string | number; completion?: string | number };
+  task?: string;
+  object?: string;
+  type?: string;
+  friendly_name?: string;
+  model_family?: string;
+  publisher?: string;
+  model_version?: number;
+  endpoint?: string;
+  architecture?: {
+    modality?: string;
+    input_modalities?: string[];
+    output_modalities?: string[];
+  };
+};
 
-      if (!response.ok) continue;
+const GEMINI_FREE_MODEL_ID = 'gemini-2.5-flash';
 
-      const data = await response.json() as { data?: Array<{ id: string; name?: string; context_length?: number; pricing?: { prompt?: string | number; completion?: string | number } }> };
-      const models: Model[] = (data.data || []).map((m) => ({
-        id: m.id,
-        name: m.name || m.id,
+function normalizeGeminiModelId(id: string): string {
+  return id.replace(/^models\//, '');
+}
+
+function normalizeGithubModelId(id: string): string {
+  const match = id.match(/\/models\/([^/]+)\//i);
+  if (match?.[1]) return match[1];
+  const parts = id.split('/').filter(Boolean);
+  return parts[parts.length - 1] || id;
+}
+
+function normalizeOpenCodeModelId(id: string): string {
+  return id.replace(/^models\//, '');
+}
+
+export function normalizeProviderModelId(providerName: string, modelId: string): string {
+  if (providerName === 'gemini') return normalizeGeminiModelId(modelId);
+  if (providerName === 'github') return normalizeGithubModelId(modelId);
+  if (providerName === 'opencode') return normalizeOpenCodeModelId(modelId);
+  return modelId;
+}
+
+export function resolveProviderModelName(providerName: string, model: RawProviderModel): string {
+  const normalizedId = normalizeProviderModelId(providerName, model.id);
+  return model.name || model.friendly_name || normalizedId;
+}
+
+function isOpenCodeFreeModel(model: RawProviderModel): boolean {
+  const id = String(model.id || '').toLowerCase();
+  const name = String(model.name || model.friendly_name || '').toLowerCase();
+  const endpoint = String(model.endpoint || '').toLowerCase();
+  return id.includes('free') || name.includes('free') || endpoint.includes('/chat/completions') || endpoint.includes('/responses');
+}
+
+function buildOpenCodeFallbackModels(): Model[] {
+  return [
+    {
+      id: 'opencode/mimo-v2-pro-free',
+      name: 'MiMo V2 Pro Free',
+      provider: 'opencode',
+      pricing: { prompt: '0', completion: '0' }
+    }
+  ];
+}
+
+function buildGithubFallbackModels(): Model[] {
+  return [
+    {
+      id: 'github/gpt-4o-mini',
+      name: 'GPT-4o Mini',
+      provider: 'github',
+      pricing: { prompt: '0', completion: '0' }
+    }
+  ];
+}
+
+export function isChatModel(model: RawProviderModel): boolean {
+  const taskSignals = `${model.task || ''} ${model.object || ''} ${model.type || ''}`.toLowerCase();
+  if (taskSignals.includes('chat') || taskSignals.includes('completion')) {
+    return true;
+  }
+
+  const modality = String(model.architecture?.modality || '').toLowerCase();
+  if (modality.includes('text->text') || modality.includes('text_to_text')) {
+    return true;
+  }
+
+  const id = String(model.id || '').toLowerCase();
+  return ['chat', 'instruct', 'gpt', 'gemini', 'llama', 'qwen', 'deepseek', 'mistral', 'claude']
+    .some(keyword => id.includes(keyword));
+}
+
+export async function fetchProviderModels(provider: Provider, key: string): Promise<Model[]> {
+  const cached = providerModelCache.get(provider.name);
+  const now = Date.now();
+  if (cached && now - cached.fetchedAt < MULTI_PROVIDER_CACHE_TTL) {
+    return cached.models;
+  }
+
+  try {
+    const response = await fetchWithTimeout(`${provider.baseURL}/models`, {
+      headers: { Authorization: `Bearer ${key}` }
+    });
+
+    if (!response.ok) {
+      if (provider.name === 'github') return buildGithubFallbackModels();
+      if (provider.name === 'opencode') return buildOpenCodeFallbackModels();
+      providerModelCache.set(provider.name, { models: [], fetchedAt: now });
+      return [];
+    }
+
+    const payload = await response.json() as { data?: RawProviderModel[] } | RawProviderModel[];
+    const rawModels = Array.isArray(payload)
+      ? payload
+      : (payload.data || []);
+
+    const models = rawModels
+      .filter(model => {
+        if (provider.name === 'gemini') {
+          return normalizeGeminiModelId(model.id) === GEMINI_FREE_MODEL_ID;
+        }
+        if (provider.name === 'github') {
+          const family = String(model.model_family || '').toLowerCase();
+          const name = String(model.friendly_name || model.name || model.id).toLowerCase();
+          const task = String(model.task || '').toLowerCase();
+          return task.includes('chat')
+            || family.includes('gpt')
+            || family.includes('llama')
+            || family.includes('mistral')
+            || name.includes('gpt')
+            || name.includes('llama')
+            || name.includes('mistral')
+            || name.includes('phi')
+            || name.includes('mini');
+        }
+        if (provider.name === 'opencode') {
+          return isOpenCodeFreeModel(model);
+        }
+        return isChatModel(model);
+      })
+      .map((model): Model => ({
+        id: `${provider.name}/${normalizeProviderModelId(provider.name, model.id)}`,
+        name: resolveProviderModelName(provider.name, model),
         provider: provider.name,
-        context_length: m.context_length,
+        context_length: model.context_length,
         pricing: {
-          prompt: m.pricing?.prompt || '0',
-          completion: m.pricing?.completion || '0'
+          prompt: model.pricing?.prompt || '0',
+          completion: model.pricing?.completion || '0'
         }
       }));
 
-      const prefixedModels = models.map(m => ({
-        ...m,
-        id: `${provider.name}/${m.id}`,
-        provider: provider.name
-      }));
+    providerModelCache.set(provider.name, { models, fetchedAt: now });
+    return models;
+  } catch (err) {
+    console.error(`[${new Date().toISOString()}] Failed to fetch models from ${provider.name}:`, err);
+    if (provider.name === 'github') return buildGithubFallbackModels();
+    if (provider.name === 'opencode') return buildOpenCodeFallbackModels();
+    return [];
+  }
+}
 
-      allModels.push(...prefixedModels);
-    } catch (err) {
-      console.error(`[${new Date().toISOString()}] Failed to fetch models from ${provider.name}:`, err);
+export function normalizeProviderModels(models: Model[]): Model[] {
+  const seen = new Set<string>();
+  const result: Model[] = [];
+
+  for (const model of models) {
+    if (model.provider === 'gemini') {
+      if (seen.has('gemini')) continue;
+      seen.add('gemini');
+      result.push({
+        ...model,
+        id: 'gemini/gemini-2.5-flash',
+        name: 'Gemini 2.5 Flash'
+      });
+      continue;
     }
+
+    if (seen.has(model.id)) continue;
+    seen.add(model.id);
+    result.push(model);
   }
 
-  return allModels;
+  return result;
 }
 
 const PARAM_SCORES = [
