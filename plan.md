@@ -1,265 +1,294 @@
-# 多 Provider 接入计划
+# UI 调整实现计划
 
-目标：新增并跑通 `Gemini` / `GitHub Models` / `Mistral` / `Cerebras` / `SambaNova`。
+## 目标
 
-核心原则：
-- 先各自独立接入，先跑通。
-- 不提前抽统一适配层。
-- 先保留 provider 特殊逻辑，等都稳定后再考虑合并。
-- 某些 provider 如果天然不同，就允许一直独立。
+本次只做前端 UI/交互调整，不改核心后端路由和回退链逻辑。目标是：
 
----
+1. 将配置供应商区改成类似“选择模型”的卡片布局，减少纵向滚动。
+2. 去掉“选择模型”里的“验证模型”动作，用户点到什么模型就直接切什么模型。
+3. 缩小模型列表中文字尺寸，提升单屏可见数量，减少滚动。
 
-## 1. 现状
-
-当前真正注册的 provider 只有 3 个：
-- `openrouter`
-- `groq`
-- `opencode`
-
-这次要补回/新增：
-- `gemini`
-- `github`
-- `mistral`
-- `cerebras`
-- `sambanova`
----
-
-## 2. 总体策略
-
-先把每个 provider 当成独立接入点处理：
-
-1. 独立 key 保存
-2. 独立 key 校验
-3. 独立模型列表拉取
-4. 独立最小调用验证
-5. 独立 fallback/路由适配
-
-等全部跑通后，再看哪些逻辑能合并。
+核心前提：后端已有 fallback 策略兜底，因此前端不再承担“先验证再选择”的职责。
 
 ---
 
-## 3. 计划拆分
+## 现状判断
 
-### 3.1 先扩展 provider 注册表
+根据 `research.md`，当前页面主要问题有两个：
 
-先把 provider 元信息补齐，不做统一抽象。
+- Provider 配置区是纵向堆叠的大块表单，8 个 Provider 会拉长页面。
+- 模型选择区里存在“验证并添加”这类前置确认流程，和当前 fallback 机制重复。
+- 模型名称、ID、状态等文案占位较大，导致一屏显示的模型数量偏少。
 
-```ts
-export const PROVIDERS: Provider[] = [
-  { name: 'openrouter', baseURL: 'https://openrouter.ai/api/v1', apiKeyEnv: 'OPENROUTER_API_KEY', format: 'openai', isFree: true },
-  { name: 'groq', baseURL: 'https://api.groq.com/openai/v1', apiKeyEnv: 'GROQ_API_KEY', format: 'openai', isFree: true },
-  { name: 'opencode', baseURL: 'https://opencode.ai/zen/v1', apiKeyEnv: 'OPENCODE_API_KEY', format: 'openai', isFree: true },
-  { name: 'gemini', baseURL: 'https://generativelanguage.googleapis.com/v1beta', apiKeyEnv: 'GEMINI_API_KEY', format: 'gemini', isFree: true },
-  { name: 'github', baseURL: 'https://models.github.ai/inference', apiKeyEnv: 'GITHUB_MODELS_API_KEY', format: 'openai', isFree: true },
-  { name: 'mistral', baseURL: 'https://api.mistral.ai/v1', apiKeyEnv: 'MISTRAL_API_KEY', format: 'openai', isFree: true },
-  { name: 'cerebras', baseURL: 'https://api.cerebras.ai/v1', apiKeyEnv: 'CEREBRAS_API_KEY', format: 'openai', isFree: true },
-  { name: 'sambanova', baseURL: 'https://api.sambanova.ai/v1', apiKeyEnv: 'SAMBANOVA_API_KEY', format: 'openai', isFree: true }
-];
+---
+
+## 修改范围
+
+### 需要改的文件
+
+- `public/index.html`
+- 如有内联脚本：同文件内的 `script` 区块
+
+### 不需要改的文件
+
+- `src/fallback.ts`
+- `src/provider-health.ts`
+- `src/candidate-pool.ts`
+
+原因：问题重点在 UI 和交互层，后端回退已能覆盖“模型不可用”的情况。
+
+---
+
+## 实现方案
+
+### 1) Provider 配置区改成卡片式网格
+
+#### 设计
+
+- 从“纵向大表单”改成“横向卡片网格”。
+- 每个 Provider 卡片只保留最关键内容：名称、状态、API Key 输入、保存按钮。
+- 次要操作（说明链接、折叠详情）放到卡片底部或次级区域。
+- 桌面端 2~4 列自适应，移动端 1 列。
+
+#### 关键结构示意
+
+```html
+<section class="provider-section">
+  <div class="section-header">
+    <h2>配置供应商</h2>
+    <p>按卡片快速配置，不再拉长页面</p>
+  </div>
+
+  <div id="providerGrid" class="provider-grid">
+    <!-- 由 JS 渲染 provider-card -->
+  </div>
+</section>
 ```
 
----
+#### 卡片模板示意
 
-### 3.2 配置层单独补 key 管理
+```html
+<article class="provider-card">
+  <div class="provider-card__top">
+    <div>
+      <h3>OpenRouter</h3>
+      <span class="provider-badge provider-badge--free">免费</span>
+    </div>
+    <span class="provider-status is-ready">已配置</span>
+  </div>
 
-`src/config.ts` 里把这些 key 都加进去，`getAllProviderKeysStatus()` 也跟着扩。
+  <label class="field-label" for="openrouterKey">API Key</label>
+  <input id="openrouterKey" class="input input--compact" type="password" />
 
-```ts
-const PROVIDER_ENV_MAP: Record<string, string> = {
-  openrouter: 'OPENROUTER_API_KEY',
-  groq: 'GROQ_API_KEY',
-  opencode: 'OPENCODE_API_KEY',
-  gemini: 'GEMINI_API_KEY',
-  github: 'GITHUB_MODELS_API_KEY',
-  mistral: 'MISTRAL_API_KEY',
-  cerebras: 'CEREBRAS_API_KEY',
-  sambanova: 'SAMBANOVA_API_KEY'
-};
+  <div class="provider-card__actions">
+    <button class="btn btn-primary btn-sm">保存</button>
+    <button class="btn btn-ghost btn-sm">修改</button>
+  </div>
+</article>
 ```
 
-重点：
-- 不要把不同 provider 的 key 校验混成同一个逻辑。
-- 哪个 provider 需要特殊格式，就单独处理。
+#### 关键样式方向
 
----
+```css
+.provider-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 12px;
+}
 
-### 3.3 UI 先显示完整供应商卡片
+.provider-card {
+  border-radius: 14px;
+  padding: 14px;
+  background: var(--panel-bg);
+  border: 1px solid var(--panel-border);
+}
 
-页面先把 8 个 provider 都显示出来，不等后端统一完美。
-
-```ts
-const providers = [
-  'openrouter', 'groq', 'opencode', 'gemini',
-  'github', 'mistral', 'cerebras', 'sambanova'
-];
-```
-
-每个卡片展示：
-- 名称
-- key 状态
-- 获取地址
-- 独立“验证”按钮
-
----
-
-## 4. 每个 provider 的独立接入方案
-
-### 4.1 Gemini
-
-特点：
-- 官方模型名带 `models/` 前缀
-- 需要单独做模型名规范化
-- `generateContent` 和 OpenAI 风格不完全一致时，保留独立逻辑
-
-关键片段：
-
-```ts
-function normalizeGeminiModelId(modelId: string): string {
-  return modelId.startsWith('models/') ? modelId : `models/${modelId}`;
+.input--compact {
+  height: 34px;
+  font-size: 12px;
 }
 ```
 
-验证策略：
-- 先 `GET /models`
-- 再对 `gemini-3.1-flash-lite-preview` 做最小 `generateContent`
+#### 交互要点
+
+- 继续沿用现有保存/掩码/状态刷新逻辑。
+- 只是把 DOM 组织方式从“纵向区块”换成“卡片网格”。
+- 如果原来有“获取 Key 链接”，建议收进卡片底部的小字链接，避免卡片过高。
 
 ---
 
-### 4.2 GitHub Models
+### 2) 取消模型验证按钮，直接选择模型
 
-特点：
-- 路径和模型命名可能与 OpenAI 接口相近
-- 但模型 id 可能需要单独清洗
-- 这次优先接入 GitHub Models 的免费模型，key 直接参考 `.env` 里的 `GITHUB_MODELS_API_KEY`
+#### 设计
 
-建议：
-- 先独立写 `github` provider 适配
-- 先验证 `models` 拉取是否稳定
-- 再接最小 chat 调用
+- 删除模型项里的“验证模型”“验证并添加”按钮。
+- 用户点击模型卡片或选择按钮后，直接调用“设置当前模型”逻辑。
+- UI 上不再展示“待验证 / 验证中”这种阻塞式状态。
+- 模型不可用的问题交给后端 fallback 处理。
 
----
+#### 关键逻辑调整
 
-### 4.3 Mistral
+原本可能是：
 
-特点：
-- OpenAI 兼容度高，但不要默认完全一致
-- 先按独立 provider 处理
-
-建议：
-- 独立 key 校验
-- 独立模型发现
-- 独立 fallback 标签
-
----
-
-### 4.4 Cerebras
-
-特点：
-- 可能模型少，但速度快
-- 先独立接入，不要提前合并到统一 provider 逻辑
-
----
-
-### 4.5 SambaNova
-
-特点：
-- 接口和模型可用性可能有自己的限制
-- 先独立验证最小调用
-
----
-
-## 5. 路由层改造
-
-不要在 `server.ts` 里继续堆大分支，先做“每 provider 一个执行器”。
-
-```ts
-type ProviderExecutor = {
-  validateKey: (apiKey: string) => Promise<boolean>;
-  listModels: (apiKey: string) => Promise<Model[]>;
-  chat: (apiKey: string, body: unknown) => Promise<Response>;
-};
+```js
+async function onValidateAndSelect(modelId) {
+  const ok = await verifyModelAvailability(modelId);
+  if (!ok) return showError('模型不可用');
+  await setCurrentModel(modelId);
+}
 ```
 
-不是统一抽象成一个大工厂，而是：
-- 每个 provider 有自己的 executor 文件
-- `server.ts` 只负责选中 provider 然后调用对应 executor
+调整后：
 
-示意：
-
-```ts
-const executor = getProviderExecutor(provider);
-const ok = await executor.validateKey(apiKey);
+```js
+async function onSelectModel(modelId) {
+  await setCurrentModel(modelId);
+  showToast(`已切换到 ${modelId}`);
+}
 ```
 
----
+#### 模型卡片点击示意
 
-## 6. fallback 策略
+```html
+<button class="model-card" data-model-id="openrouter/qwen3-8b">
+  <div class="model-card__main">
+    <div class="model-name">Qwen3 8B</div>
+    <div class="model-meta">openrouter/qwen3-8b</div>
+  </div>
+  <span class="model-card__arrow">切换</span>
+</button>
+```
 
-先不做“全 provider 统一评分模型”。
+#### JS 事件绑定示意
 
-阶段 1：
-- 每个 provider 只要能返回可用模型就算成功
-- fallback 只按可用性和失败历史排序
+```js
+document.addEventListener('click', async (e) => {
+  const card = e.target.closest('[data-model-id]');
+  if (!card) return;
+  const modelId = card.dataset.modelId;
+  await onSelectModel(modelId);
+});
+```
 
-阶段 2：
-- 再考虑是否把一些共性逻辑合并
+#### 需要同步删除的 UI 文案
 
-关键点：
-- Gemini / GitHub Models / Mistral / Cerebras / SambaNova 不强行共用同一套评分规则
+- “验证模型”
+- “验证并添加”
+- “模型待确认”
+- “先验证再使用”
 
----
+#### 保留的能力
 
-## 7. 验收顺序
-
-按这个顺序推进：
-
-1. `PROVIDERS` 扩展到 8 个
-2. `.env` / key 状态显示完整
-3. 每个 provider 都能单独验证 key
-4. 每个 provider 至少能拉到模型列表
-5. 每个 provider 至少能跑通一个最小调用
-6. 每个 provider 至少有 1 个 smoke test，验证模型调用成功
-7. UI 能看到 8 个供应商
-8. 再考虑 fallback 和统一化
-
----
-
-## 8. 暂不做的事
-
-- 不提前做统一 provider adapter
-- 不提前合并成同一个 chat 请求路径
-- 不提前做数据库
-- 不提前做复杂权限系统
+- 刷新模型列表。
+- 切换 Provider 筛选。
+- 当前模型展示。
+- 手动添加模型时，保留最小必要输入，不再要求先验证。
 
 ---
 
-## 9. TODO 列表
+### 3) 缩小模型字体和卡片密度
 
-### 阶段 1：打通基础接入
+#### 设计
 
-- [ ] 扩展 `PROVIDERS` 注册表，加入 `gemini` / `github` / `mistral` / `cerebras` / `sambanova`
-- [ ] 扩展 `PROVIDER_ENV_MAP` 和 `getAllProviderKeysStatus()`
-- [ ] 更新 UI，显示 8 个供应商卡片和独立 key 状态
-- [ ] 为每个 provider 补独立验证入口
+- 模型标题从大号标题改成中小号文本。
+- 模型 ID、标签、状态全部降一档字号。
+- 减少 padding 和行高，提升单屏密度。
 
-### 阶段 2：独立 provider 逻辑
+#### 建议样式
 
-- [ ] 为 `gemini` 编写独立模型名规范化和最小调用验证
-- [ ] 为 `github` 编写独立模型拉取和最小调用验证
-- [ ] 为 `mistral` 编写独立 key 校验、模型拉取和最小调用验证
-- [ ] 为 `cerebras` 编写独立 key 校验、模型拉取和最小调用验证
-- [ ] 为 `sambanova` 编写独立 key 校验、模型拉取和最小调用验证
+```css
+.model-list {
+  display: grid;
+  gap: 8px;
+}
 
-### 阶段 3：路由与 fallback
+.model-card {
+  padding: 10px 12px;
+  min-height: 56px;
+  font-size: 12px;
+}
 
-- [ ] 为每个 provider 拆出独立 executor
-- [ ] 让 `server.ts` 只负责选择 provider 并转发
-- [ ] 保留 provider 专属 fallback 规则，不强行统一评分
+.model-name {
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1.2;
+}
 
-### 阶段 4：测试与验收
+.model-meta,
+.model-status,
+.model-badge {
+  font-size: 11px;
+  line-height: 1.1;
+}
+```
 
-- [ ] 为每个 provider 增加至少 1 个 smoke test
-- [ ] 确认每个 provider 都能返回模型列表
-- [ ] 确认每个 provider 都能完成一次最小调用
-- [ ] 确认 UI / API / 测试结果一致
-- [ ] 再决定哪些逻辑可以合并重构
+#### 视觉原则
+
+- 让“名称”保留主要可读性。
+- “ID/状态”做辅助信息，避免占用太多视觉重量。
+- 通过缩小间距而不是隐藏信息，降低误操作风险。
+
+---
+
+## 具体实施步骤
+
+### Step 1: 重构 Provider 配置区 DOM
+
+1. 找到 `public/index.html` 中 Provider 配置区的静态结构。
+2. 抽出统一的卡片容器。
+3. 用现有 Provider 数据循环渲染卡片。
+4. 保持保存、修改、状态展示逻辑不变。
+
+### Step 2: 清理模型验证相关 UI
+
+1. 删除模型列表里的验证按钮。
+2. 删除验证流程分支。
+3. 将点击模型后的动作统一为“立即切换”。
+4. 调整空状态和错误提示文案。
+
+### Step 3: 压缩模型区视觉密度
+
+1. 调小模型名、模型 ID、标签字号。
+2. 减小卡片 padding 和按钮高度。
+3. 调整网格间距，增加单屏可见数量。
+4. 在移动端继续保持可点性，不低于最小触控尺寸。
+
+### Step 4: 回归检查
+
+1. 检查 Provider 卡片在桌面/移动端是否换行正常。
+2. 检查点击模型是否直接切换成功。
+3. 检查 fallback 是否仍能在后端兜底。
+4. 检查页面是否明显减少纵向滚动。
+
+---
+
+## 风险与处理
+
+- **风险 1：用户误选不可用模型**
+  - 处理：保留后端 fallback 和清晰失败提示，不在前端做二次验证。
+
+- **风险 2：卡片压缩后可读性下降**
+  - 处理：只缩小次要信息，标题仍保持清晰。
+
+- **风险 3：Provider 卡片过于拥挤**
+  - 处理：用 grid 自适应列数，移动端退化为单列。
+
+---
+
+## 验收标准
+
+- Provider 配置区改为卡片布局后，首屏能看到更多配置项。
+- 模型列表中不再出现“验证模型”相关按钮或文案。
+- 点击模型即完成切换，无需等待验证结果。
+- 模型卡片字号和间距更小，滚动长度明显下降。
+- fallback 机制仍保持有效，页面不依赖前端验证兜底。
+
+---
+
+## 推荐落地顺序
+
+1. 先改 Provider 卡片布局。
+2. 再删模型验证交互。
+3. 最后统一压缩模型字体与间距。
+
+这样能先解决最明显的滚动问题，再做交互简化，风险最低。

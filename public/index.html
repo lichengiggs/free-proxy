@@ -6,31 +6,31 @@
   <title>Free Proxy - 多 Provider 支持</title>
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; }
-    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; max-width: 900px; margin: 0 auto; padding: 2rem; background: #f9fafb; }
-    .card { background: white; border-radius: 8px; padding: 1.5rem; margin-bottom: 1.5rem; box-shadow: 0 1px 3px rgba(0,0,0,0.1); }
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; max-width: 1100px; margin: 0 auto; padding: 1.5rem; background: #f9fafb; }
+    .card { background: white; border-radius: 12px; padding: 1.25rem; margin-bottom: 1rem; box-shadow: 0 1px 3px rgba(0,0,0,0.08); }
     h1 { font-size: 1.5rem; margin-bottom: 1.5rem; color: #111827; }
     h2 { font-size: 1.125rem; margin-bottom: 1rem; color: #374151; }
     h3 { font-size: 1rem; margin-bottom: 0.75rem; color: #374151; }
-    .btn { padding: 0.5rem 1rem; border: none; border-radius: 6px; cursor: pointer; font-weight: 500; transition: background 0.2s; }
+    .btn { padding: 0.5rem 1rem; border: none; border-radius: 8px; cursor: pointer; font-weight: 500; transition: background 0.2s; }
     .btn-primary { background: #2563eb; color: white; }
     .btn-primary:hover { background: #1d4ed8; }
     .btn-primary:disabled { background: #93c5fd; cursor: not-allowed; }
     .btn-secondary { background: #e5e7eb; color: #374151; }
     .btn-secondary:hover { background: #d1d5db; }
     .btn-sm { padding: 0.25rem 0.5rem; font-size: 0.875rem; }
-    .input { width: 100%; padding: 0.75rem; border: 1px solid #d1d5db; border-radius: 6px; font-size: 1rem; margin-bottom: 0.75rem; }
+    .input { width: 100%; padding: 0.7rem 0.75rem; border: 1px solid #d1d5db; border-radius: 8px; font-size: 0.95rem; margin-bottom: 0.65rem; }
     .input:focus { outline: none; border-color: #2563eb; box-shadow: 0 0 0 3px rgba(37,99,235,0.1); }
     .status { padding: 0.75rem; border-radius: 6px; margin-top: 0.75rem; }
     .status-success { background: #d1fae5; color: #065f46; }
     .status-error { background: #fee2e2; color: #991b1b; }
     .status-info { background: #dbeafe; color: #1e40af; }
-    .model-list { list-style: none; border: 1px solid #e5e7eb; border-radius: 6px; overflow: hidden; max-height: 400px; overflow-y: auto; }
-    .model-item { padding: 0.75rem 1rem; border-bottom: 1px solid #e5e7eb; display: flex; justify-content: space-between; align-items: center; }
+    .model-list { list-style: none; border: 1px solid #e5e7eb; border-radius: 10px; overflow: hidden; max-height: 360px; overflow-y: auto; background: white; }
+    .model-item { padding: 0.5rem 0.75rem; border-bottom: 1px solid #e5e7eb; display: flex; justify-content: space-between; align-items: center; gap: 0.75rem; }
     .model-item:last-child { border-bottom: none; }
     .model-item.recommended { background: #f0fdf4; }
     .model-item.active { background: #eff6ff; }
-    .model-name { font-weight: 500; color: #111827; }
-    .model-id { color: #6b7280; font-size: 0.875rem; margin-top: 0.125rem; }
+    .model-name { font-weight: 600; color: #111827; font-size: 0.9rem; line-height: 1.2; }
+    .model-id { color: #6b7280; font-size: 0.78rem; margin-top: 0.1rem; line-height: 1.15; }
     .badge { background: #10b981; color: white; padding: 0.125rem 0.5rem; border-radius: 9999px; font-size: 0.75rem; margin-left: 0.25rem; }
     .badge-free { background: #10b981; }
     .badge-partial { background: #f59e0b; }
@@ -47,16 +47,18 @@
     .backup-item:last-child { border-bottom: none; }
     
     /* Provider Section Styles */
-    .provider-section { margin-bottom: 1rem; padding: 1rem; border: 1px solid #e5e7eb; border-radius: 6px; }
-    .provider-header { display: flex; align-items: center; margin-bottom: 0.5rem; }
-    .provider-name { font-weight: 600; font-size: 1rem; }
+    .provider-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: 0.75rem; }
+    .provider-section { margin-bottom: 0; padding: 0.9rem; border: 1px solid #e5e7eb; border-radius: 12px; background: #fff; min-width: 0; }
+    .provider-header { display: flex; align-items: center; gap: 0.4rem; margin-bottom: 0.65rem; flex-wrap: wrap; }
+    .provider-name { font-weight: 700; font-size: 0.98rem; }
     .provider-badge { background: #10b981; color: white; padding: 0.125rem 0.5rem; border-radius: 9999px; font-size: 0.75rem; margin-left: 0.5rem; }
     .provider-badge.partial { background: #f59e0b; }
     .provider-status { margin-left: auto; font-size: 0.875rem; color: #6b7280; }
     .provider-status.configured { color: #10b981; font-weight: 500; }
     .provider-key-form { display: flex; gap: 0.5rem; align-items: center; }
     .provider-key-form .input { margin-bottom: 0; flex: 1; }
-    .provider-link { font-size: 0.875rem; color: #6b7280; margin-top: 0.25rem; }
+    .provider-link { font-size: 0.78rem; color: #6b7280; margin-top: 0.35rem; line-height: 1.2; }
+    .provider-link a { color: #6b7280; }
     
     /* Tab Styles */
     .tabs { display: flex; gap: 0.5rem; margin-bottom: 1rem; border-bottom: 1px solid #e5e7eb; padding-bottom: 0.5rem; }
@@ -71,8 +73,18 @@
     .search-status.hidden { display: none; }
     
     /* Custom Provider/Model Cards */
-    .custom-card { background: #f9fafb; border: 1px dashed #d1d5db; border-radius: 6px; padding: 1rem; margin-top: 0.5rem; }
+    .custom-card { background: #f9fafb; border: 1px dashed #d1d5db; border-radius: 10px; padding: 0.9rem; margin-top: 0.5rem; }
     .custom-card-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.5rem; }
+    .section-subtitle { color: #6b7280; font-size: 0.85rem; margin-bottom: 1rem; }
+    .provider-section h3 { margin-bottom: 0.5rem; }
+    @media (max-width: 640px) {
+      body { padding: 0.75rem; }
+      .card { padding: 1rem; }
+      .provider-grid { grid-template-columns: 1fr; }
+      .model-item { padding: 0.45rem 0.6rem; }
+      .model-name { font-size: 0.88rem; }
+      .model-id { font-size: 0.75rem; }
+    }
   </style>
 </head>
 <body>
@@ -81,164 +93,151 @@
   <!-- Step 1: Provider Configuration -->
   <div class="card" id="providerSection">
     <h2>1. 配置供应商</h2>
+    <div class="section-subtitle">改成卡片网格，减少首屏纵向堆叠</div>
     
-    <!-- OpenRouter -->
-    <div class="provider-section" id="openrouter-provider">
-      <div class="provider-header">
-        <span class="provider-name">OpenRouter</span>
-        <span class="provider-badge badge-free">免费</span>
-        <span class="provider-status" id="openrouter-status">未配置</span>
+    <div class="provider-grid" id="providerGrid">
+      <!-- OpenRouter -->
+      <div class="provider-section" id="openrouter-provider">
+        <div class="provider-header">
+          <span class="provider-name">OpenRouter</span>
+          <span class="provider-badge badge-free">免费</span>
+          <span class="provider-status" id="openrouter-status">未配置</span>
+        </div>
+        <div class="provider-key-form" id="openrouter-form">
+          <input type="password" id="openrouter-key" class="input" placeholder="sk-or-..." autocomplete="off">
+          <button class="btn btn-primary btn-sm" onclick="saveProviderKey('openrouter')">保存</button>
+        </div>
+        <div class="provider-key-form" id="openrouter-form-configured" style="display: none;">
+          <span id="openrouter-masked" style="flex: 1; color: #10b981; font-size: 0.85rem;"></span>
+          <button class="btn btn-secondary btn-sm" onclick="resetProviderKey('openrouter')">修改</button>
+        </div>
+        <div class="provider-link">获取 Key：<a href="https://openrouter.ai/keys" target="_blank" class="link">openrouter.ai/keys</a></div>
       </div>
-      <div class="provider-key-form" id="openrouter-form">
-        <input type="password" id="openrouter-key" class="input" placeholder="sk-or-..." autocomplete="off">
-        <button class="btn btn-primary" onclick="saveProviderKey('openrouter')">保存</button>
-      </div>
-      <div class="provider-key-form" id="openrouter-form-configured" style="display: none;">
-        <span id="openrouter-masked" style="flex: 1; color: #10b981;"></span>
-        <button class="btn btn-secondary btn-sm" onclick="resetProviderKey('openrouter')">修改</button>
-      </div>
-      <div class="provider-link">
-        获取 Key：<a href="https://openrouter.ai/keys" target="_blank" class="link">openrouter.ai/keys</a>
-      </div>
-    </div>
     
-    <!-- Groq -->
-    <div class="provider-section" id="groq-provider">
-      <div class="provider-header">
-        <span class="provider-name">Groq</span>
-        <span class="provider-badge badge-free">免费</span>
-        <span class="provider-status" id="groq-status">未配置</span>
+      <!-- Groq -->
+      <div class="provider-section" id="groq-provider">
+        <div class="provider-header">
+          <span class="provider-name">Groq</span>
+          <span class="provider-badge badge-free">免费</span>
+          <span class="provider-status" id="groq-status">未配置</span>
+        </div>
+        <div class="provider-key-form" id="groq-form">
+          <input type="password" id="groq-key" class="input" placeholder="gsk-..." autocomplete="off">
+          <button class="btn btn-primary btn-sm" onclick="saveProviderKey('groq')">保存</button>
+        </div>
+        <div class="provider-key-form" id="groq-form-configured" style="display: none;">
+          <span id="groq-masked" style="flex: 1; color: #10b981; font-size: 0.85rem;"></span>
+          <button class="btn btn-secondary btn-sm" onclick="resetProviderKey('groq')">修改</button>
+        </div>
+        <div class="provider-link">获取 Key：<a href="https://console.groq.com/keys" target="_blank" class="link">console.groq.com/keys</a></div>
       </div>
-      <div class="provider-key-form" id="groq-form">
-        <input type="password" id="groq-key" class="input" placeholder="gsk-..." autocomplete="off">
-        <button class="btn btn-primary" onclick="saveProviderKey('groq')">保存</button>
-      </div>
-      <div class="provider-key-form" id="groq-form-configured" style="display: none;">
-        <span id="groq-masked" style="flex: 1; color: #10b981;"></span>
-        <button class="btn btn-secondary btn-sm" onclick="resetProviderKey('groq')">修改</button>
-      </div>
-      <div class="provider-link">
-        获取 Key：<a href="https://console.groq.com/keys" target="_blank" class="link">console.groq.com/keys</a>
-      </div>
-    </div>
     
-    <!-- OpenCode Zen -->
-    <div class="provider-section" id="opencode-provider">
-      <div class="provider-header">
-        <span class="provider-name">OpenCode Zen</span>
-        <span class="provider-badge badge-partial">部分免费</span>
-        <span class="provider-status" id="opencode-status">未配置</span>
+      <!-- OpenCode Zen -->
+      <div class="provider-section" id="opencode-provider">
+        <div class="provider-header">
+          <span class="provider-name">OpenCode Zen</span>
+          <span class="provider-badge badge-partial">部分免费</span>
+          <span class="provider-status" id="opencode-status">未配置</span>
+        </div>
+        <div class="provider-key-form" id="opencode-form">
+          <input type="password" id="opencode-key" class="input" placeholder="zen-..." autocomplete="off">
+          <button class="btn btn-primary btn-sm" onclick="saveProviderKey('opencode')">保存</button>
+        </div>
+        <div class="provider-key-form" id="opencode-form-configured" style="display: none;">
+          <span id="opencode-masked" style="flex: 1; color: #10b981; font-size: 0.85rem;"></span>
+          <button class="btn btn-secondary btn-sm" onclick="resetProviderKey('opencode')">修改</button>
+        </div>
+        <div class="provider-link">获取 Key：<a href="https://opencode.ai/auth" target="_blank" class="link">opencode.ai/auth</a></div>
       </div>
-      <div class="provider-key-form" id="opencode-form">
-        <input type="password" id="opencode-key" class="input" placeholder="zen-..." autocomplete="off">
-        <button class="btn btn-primary" onclick="saveProviderKey('opencode')">保存</button>
-      </div>
-      <div class="provider-key-form" id="opencode-form-configured" style="display: none;">
-        <span id="opencode-masked" style="flex: 1; color: #10b981;"></span>
-        <button class="btn btn-secondary btn-sm" onclick="resetProviderKey('opencode')">修改</button>
-      </div>
-      <div class="provider-link">
-        获取 Key：<a href="https://opencode.ai/auth" target="_blank" class="link">opencode.ai/auth</a>
-      </div>
-    </div>
 
-    <!-- Gemini -->
-    <div class="provider-section" id="gemini-provider">
-      <div class="provider-header">
-        <span class="provider-name">Gemini</span>
-        <span class="provider-badge badge-free">免费</span>
-        <span class="provider-status" id="gemini-status">未配置</span>
+      <!-- Gemini -->
+      <div class="provider-section" id="gemini-provider">
+        <div class="provider-header">
+          <span class="provider-name">Gemini</span>
+          <span class="provider-badge badge-free">免费</span>
+          <span class="provider-status" id="gemini-status">未配置</span>
+        </div>
+        <div class="provider-key-form" id="gemini-form">
+          <input type="password" id="gemini-key" class="input" placeholder="AIza..." autocomplete="off">
+          <button class="btn btn-primary btn-sm" onclick="saveProviderKey('gemini')">保存</button>
+        </div>
+        <div class="provider-key-form" id="gemini-form-configured" style="display: none;">
+          <span id="gemini-masked" style="flex: 1; color: #10b981; font-size: 0.85rem;"></span>
+          <button class="btn btn-secondary btn-sm" onclick="resetProviderKey('gemini')">修改</button>
+        </div>
+        <div class="provider-link">获取 Key：<a href="https://aistudio.google.com/app/apikey" target="_blank" class="link">aistudio.google.com/app/apikey</a></div>
       </div>
-      <div class="provider-key-form" id="gemini-form">
-        <input type="password" id="gemini-key" class="input" placeholder="AIza..." autocomplete="off">
-        <button class="btn btn-primary" onclick="saveProviderKey('gemini')">保存</button>
-      </div>
-      <div class="provider-key-form" id="gemini-form-configured" style="display: none;">
-        <span id="gemini-masked" style="flex: 1; color: #10b981;"></span>
-        <button class="btn btn-secondary btn-sm" onclick="resetProviderKey('gemini')">修改</button>
-      </div>
-      <div class="provider-link">
-        获取 Key：<a href="https://aistudio.google.com/app/apikey" target="_blank" class="link">aistudio.google.com/app/apikey</a>
-      </div>
-    </div>
 
-    <!-- GitHub Models -->
-    <div class="provider-section" id="github-provider">
-      <div class="provider-header">
-        <span class="provider-name">GitHub Models</span>
-        <span class="provider-badge badge-free">免费</span>
-        <span class="provider-status" id="github-status">未配置</span>
+      <!-- GitHub Models -->
+      <div class="provider-section" id="github-provider">
+        <div class="provider-header">
+          <span class="provider-name">GitHub Models</span>
+          <span class="provider-badge badge-free">免费</span>
+          <span class="provider-status" id="github-status">未配置</span>
+        </div>
+        <div class="provider-key-form" id="github-form">
+          <input type="password" id="github-key" class="input" placeholder="ghp_..." autocomplete="off">
+          <button class="btn btn-primary btn-sm" onclick="saveProviderKey('github')">保存</button>
+        </div>
+        <div class="provider-key-form" id="github-form-configured" style="display: none;">
+          <span id="github-masked" style="flex: 1; color: #10b981; font-size: 0.85rem;"></span>
+          <button class="btn btn-secondary btn-sm" onclick="resetProviderKey('github')">修改</button>
+        </div>
+        <div class="provider-link">获取 Key：<a href="https://github.com/settings/tokens" target="_blank" class="link">github.com/settings/tokens</a></div>
       </div>
-      <div class="provider-key-form" id="github-form">
-        <input type="password" id="github-key" class="input" placeholder="ghp_..." autocomplete="off">
-        <button class="btn btn-primary" onclick="saveProviderKey('github')">保存</button>
-      </div>
-      <div class="provider-key-form" id="github-form-configured" style="display: none;">
-        <span id="github-masked" style="flex: 1; color: #10b981;"></span>
-        <button class="btn btn-secondary btn-sm" onclick="resetProviderKey('github')">修改</button>
-      </div>
-      <div class="provider-link">
-        获取 Key：<a href="https://github.com/settings/tokens" target="_blank" class="link">github.com/settings/tokens</a>
-      </div>
-    </div>
 
-    <!-- Mistral -->
-    <div class="provider-section" id="mistral-provider">
-      <div class="provider-header">
-        <span class="provider-name">Mistral</span>
-        <span class="provider-badge badge-free">免费</span>
-        <span class="provider-status" id="mistral-status">未配置</span>
+      <!-- Mistral -->
+      <div class="provider-section" id="mistral-provider">
+        <div class="provider-header">
+          <span class="provider-name">Mistral</span>
+          <span class="provider-badge badge-free">免费</span>
+          <span class="provider-status" id="mistral-status">未配置</span>
+        </div>
+        <div class="provider-key-form" id="mistral-form">
+          <input type="password" id="mistral-key" class="input" placeholder="mist-..." autocomplete="off">
+          <button class="btn btn-primary btn-sm" onclick="saveProviderKey('mistral')">保存</button>
+        </div>
+        <div class="provider-key-form" id="mistral-form-configured" style="display: none;">
+          <span id="mistral-masked" style="flex: 1; color: #10b981; font-size: 0.85rem;"></span>
+          <button class="btn btn-secondary btn-sm" onclick="resetProviderKey('mistral')">修改</button>
+        </div>
+        <div class="provider-link">获取 Key：<a href="https://console.mistral.ai/api-keys" target="_blank" class="link">console.mistral.ai/api-keys</a></div>
       </div>
-      <div class="provider-key-form" id="mistral-form">
-        <input type="password" id="mistral-key" class="input" placeholder="mist-..." autocomplete="off">
-        <button class="btn btn-primary" onclick="saveProviderKey('mistral')">保存</button>
-      </div>
-      <div class="provider-key-form" id="mistral-form-configured" style="display: none;">
-        <span id="mistral-masked" style="flex: 1; color: #10b981;"></span>
-        <button class="btn btn-secondary btn-sm" onclick="resetProviderKey('mistral')">修改</button>
-      </div>
-      <div class="provider-link">
-        获取 Key：<a href="https://console.mistral.ai/api-keys" target="_blank" class="link">console.mistral.ai/api-keys</a>
-      </div>
-    </div>
 
-    <!-- Cerebras -->
-    <div class="provider-section" id="cerebras-provider">
-      <div class="provider-header">
-        <span class="provider-name">Cerebras</span>
-        <span class="provider-badge badge-free">免费</span>
-        <span class="provider-status" id="cerebras-status">未配置</span>
+      <!-- Cerebras -->
+      <div class="provider-section" id="cerebras-provider">
+        <div class="provider-header">
+          <span class="provider-name">Cerebras</span>
+          <span class="provider-badge badge-free">免费</span>
+          <span class="provider-status" id="cerebras-status">未配置</span>
+        </div>
+        <div class="provider-key-form" id="cerebras-form">
+          <input type="password" id="cerebras-key" class="input" placeholder="csk_..." autocomplete="off">
+          <button class="btn btn-primary btn-sm" onclick="saveProviderKey('cerebras')">保存</button>
+        </div>
+        <div class="provider-key-form" id="cerebras-form-configured" style="display: none;">
+          <span id="cerebras-masked" style="flex: 1; color: #10b981; font-size: 0.85rem;"></span>
+          <button class="btn btn-secondary btn-sm" onclick="resetProviderKey('cerebras')">修改</button>
+        </div>
+        <div class="provider-link">获取 Key：<a href="https://cloud.cerebras.ai/" target="_blank" class="link">cloud.cerebras.ai</a></div>
       </div>
-      <div class="provider-key-form" id="cerebras-form">
-        <input type="password" id="cerebras-key" class="input" placeholder="csk_..." autocomplete="off">
-        <button class="btn btn-primary" onclick="saveProviderKey('cerebras')">保存</button>
-      </div>
-      <div class="provider-key-form" id="cerebras-form-configured" style="display: none;">
-        <span id="cerebras-masked" style="flex: 1; color: #10b981;"></span>
-        <button class="btn btn-secondary btn-sm" onclick="resetProviderKey('cerebras')">修改</button>
-      </div>
-      <div class="provider-link">
-        获取 Key：<a href="https://cloud.cerebras.ai/" target="_blank" class="link">cloud.cerebras.ai</a>
-      </div>
-    </div>
 
-    <!-- SambaNova -->
-    <div class="provider-section" id="sambanova-provider">
-      <div class="provider-header">
-        <span class="provider-name">SambaNova</span>
-        <span class="provider-badge badge-free">免费</span>
-        <span class="provider-status" id="sambanova-status">未配置</span>
-      </div>
-      <div class="provider-key-form" id="sambanova-form">
-        <input type="password" id="sambanova-key" class="input" placeholder="sn-..." autocomplete="off">
-        <button class="btn btn-primary" onclick="saveProviderKey('sambanova')">保存</button>
-      </div>
-      <div class="provider-key-form" id="sambanova-form-configured" style="display: none;">
-        <span id="sambanova-masked" style="flex: 1; color: #10b981;"></span>
-        <button class="btn btn-secondary btn-sm" onclick="resetProviderKey('sambanova')">修改</button>
-      </div>
-      <div class="provider-link">
-        获取 Key：<a href="https://cloud.sambanova.ai/iggs/free-proxy" target="_blank" class="link">cloud.sambanova.ai/iggs/free-proxy</a>
+      <!-- SambaNova -->
+      <div class="provider-section" id="sambanova-provider">
+        <div class="provider-header">
+          <span class="provider-name">SambaNova</span>
+          <span class="provider-badge badge-free">免费</span>
+          <span class="provider-status" id="sambanova-status">未配置</span>
+        </div>
+        <div class="provider-key-form" id="sambanova-form">
+          <input type="password" id="sambanova-key" class="input" placeholder="sn-..." autocomplete="off">
+          <button class="btn btn-primary btn-sm" onclick="saveProviderKey('sambanova')">保存</button>
+        </div>
+        <div class="provider-key-form" id="sambanova-form-configured" style="display: none;">
+          <span id="sambanova-masked" style="flex: 1; color: #10b981; font-size: 0.85rem;"></span>
+          <button class="btn btn-secondary btn-sm" onclick="resetProviderKey('sambanova')">修改</button>
+        </div>
+        <div class="provider-link">获取 Key：<a href="https://cloud.sambanova.ai/iggs/free-proxy" target="_blank" class="link">cloud.sambanova.ai/iggs/free-proxy</a></div>
       </div>
     </div>
   </div>
@@ -247,10 +246,10 @@
   <div class="card" id="modelsSection" style="display: none;">
     <h2>2. 选择模型</h2>
     
-    <div class="tabs">
-      <button class="tab-btn active" onclick="switchModelTab('all')">全部</button>
-      <button class="tab-btn" onclick="switchModelTab('openrouter')">OpenRouter</button>
-      <button class="tab-btn" onclick="switchModelTab('groq')">Groq</button>
+      <div class="tabs" style="flex-wrap: wrap; gap: 0.4rem;">
+        <button class="tab-btn active" onclick="switchModelTab('all')">全部</button>
+        <button class="tab-btn" onclick="switchModelTab('openrouter')">OpenRouter</button>
+        <button class="tab-btn" onclick="switchModelTab('groq')">Groq</button>
         <button class="tab-btn" onclick="switchModelTab('opencode')">OpenCode</button>
         <button class="tab-btn" onclick="switchModelTab('gemini')">Gemini</button>
         <button class="tab-btn" onclick="switchModelTab('github')">GitHub Models</button>
@@ -266,9 +265,9 @@
 
     <div class="custom-card">
       <div class="custom-card-header">
-        <strong>手动添加模型（限时免费/价格字段不准确时使用）</strong>
+        <strong>手动添加模型（直接保存，不再验证）</strong>
       </div>
-      <div class="provider-key-form" style="margin-bottom: 0.5rem;">
+      <div class="provider-key-form" style="margin-bottom: 0.35rem; gap: 0.4rem; flex-wrap: wrap;">
         <select id="customModelProvider" class="input" style="max-width: 180px; margin-bottom: 0;">
           <option value="openrouter">OpenRouter</option>
           <option value="groq">Groq</option>
@@ -280,16 +279,16 @@
           <option value="sambanova">SambaNova</option>
         </select>
         <input id="customModelId" class="input" placeholder="例如 meta-llama/llama-3.3-70b-instruct" autocomplete="off" style="margin-bottom: 0;">
-        <button class="btn btn-primary" onclick="verifyAndSaveCustomModel()">验证并添加</button>
+        <button class="btn btn-primary" onclick="saveCustomModelDirectly()">添加</button>
       </div>
-      <div id="customModelStatus" style="font-size: 0.875rem; color: #6b7280; margin-bottom: 0.5rem;"></div>
+      <div id="customModelStatus" style="font-size: 0.8rem; color: #6b7280; margin-bottom: 0.35rem;"></div>
       <div id="customModelList"></div>
     </div>
     
-    <div style="margin-top: 1rem; padding: 0.75rem; background: #f3f4f6; border-radius: 6px; font-size: 0.875rem;">
+    <div style="margin-top: 0.9rem; padding: 0.7rem; background: #f3f4f6; border-radius: 8px; font-size: 0.82rem;">
       在 OpenClaw 中使用：<code style="background: #e5e7eb; padding: 0.125rem 0.375rem; border-radius: 4px;">/model free_proxy/auto</code>
     </div>
-    <div id="currentModel" style="margin-top: 0.5rem; padding: 0.5rem 0.75rem; background: #ecfdf5; border-radius: 6px; font-size: 0.875rem; display: none;">
+    <div id="currentModel" style="margin-top: 0.5rem; padding: 0.45rem 0.7rem; background: #ecfdf5; border-radius: 8px; font-size: 0.82rem; display: none;">
       当前模型：<span id="currentModelName" style="font-weight: 500;"></span>
     </div>
   </div>
@@ -478,13 +477,11 @@
             <div class="model-name">
               ${model.name}
               ${model.is_recommended ? '<span class="badge">推荐</span>' : ''}
-              ${model.verified === true ? '<span class="badge" style="background:#059669;">已验证</span>' : ''}
-              ${model.verified === false ? '<span class="badge" style="background:#d97706;">待确认</span>' : ''}
               <span class="badge current-badge" style="background: #2563eb; display: ${isCurrent ? 'inline' : 'none'};">当前</span>
             </div>
-            <div class="model-id">${model.id}${model.verify_reason ? ` · ${model.verify_reason}` : ''}</div>
+            <div class="model-id">${model.id}</div>
           </div>
-          <button class="btn btn-primary select-btn" ${isCurrent ? 'disabled' : ''} onclick="selectModel('${model.id}')">
+          <button class="btn btn-primary btn-sm select-btn" ${isCurrent ? 'disabled' : ''} onclick="selectModel('${model.id}')">
             ${isCurrent ? '已选择' : '选择'}
           </button>
         `;
@@ -519,7 +516,7 @@
       }
     }
 
-    async function verifyAndSaveCustomModel() {
+    async function saveCustomModelDirectly() {
       const provider = document.getElementById('customModelProvider').value;
       const modelId = document.getElementById('customModelId').value.trim();
       const statusEl = document.getElementById('customModelStatus');
@@ -529,20 +526,8 @@
         return;
       }
 
-      statusEl.textContent = '正在验证模型可用性...';
+      statusEl.textContent = '正在添加模型...';
       try {
-        const verifyRes = await fetch('/api/custom-models/verify', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ provider, modelId })
-        });
-        const verifyData = await verifyRes.json();
-        if (!verifyRes.ok || !verifyData.verified) {
-          statusEl.textContent = verifyData.message || '模型验证失败';
-          showToast(statusEl.textContent, 'error');
-          return;
-        }
-
         const saveRes = await fetch('/api/custom-models', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -554,7 +539,7 @@
           return;
         }
 
-        statusEl.textContent = '模型已验证并添加到候选列表';
+        statusEl.textContent = '模型已添加到候选列表';
         showToast('手动模型添加成功');
         document.getElementById('customModelId').value = '';
         loadCustomModels();
@@ -592,7 +577,7 @@
         if (res.ok) {
           showToast('模型切换成功');
           
-          // 只更新UI状态，不重新获取列表
+          // 直接切换，不做前置验证；fallback 交给后端兜底
           document.querySelectorAll('.model-item').forEach(item => {
             const isTarget = item.getAttribute('data-model-id') === modelId;
             
@@ -614,7 +599,7 @@
           });
           
           // 更新顶部当前模型显示
-          const selectedItem = document.querySelector(`[data-model-id="${modelId}"]`);
+          const selectedItem = document.querySelector(`[data-model-id="${CSS.escape(modelId)}"]`);
           if (selectedItem) {
             const nameEl = selectedItem.querySelector('.model-name');
             const idEl = selectedItem.querySelector('.model-id');
