@@ -4,17 +4,17 @@
 
 聚合多家 provider 的免费层，变成一个可用的 token 池，方便个人开发与日常编码。
 
-一句话概览：免费、易用、能撑起日常编码工作流。
+一句话概览：免费、易用、能足够日常OpenClaw使用。
 
 ### 免费额度一览
 
 | 方案 | 稳定性 | 额度 | 成本 |
 |---|---:|---|---:|
 | `free_proxy` | 中 | 估算：约 3.3k 次/日（约 100k 次/月），等价约 300USD/月，支持并发 3–5 人 | 免费 |
-| 美国付费 coding plan（示例） | 高 | 约 200–10,000 次/月（示例估算，随订阅档位） | 20-200USD/月 |
-| 国内付费 coding plan（阿里云百炼示例） | 高 | Lite：18,000 次/月；Pro：90,000 次/月（官方示例） | Lite：7.9RMB（首月）；Pro：39.9RMB（首月） |
+| 美国付费 coding plan | 高 | 约 200–10,000 次/月 | 20-200USD/月 |
+| 国内付费 coding plan | 高 | Lite：18,000 次/月；Pro：90,000 次/月 | 20-200RMB/月 |
 
-说明：以上额度为保守估算，实际值会因 provider/地区/账号而异。阿里云百炼示例来源：https://developer.aliyun.com/article/1713813
+
 
 ## 核心功能（快速看）
 
@@ -39,6 +39,7 @@ npm install
 ```bash
 npm start
 ```
+to小白：在命令行运行npm start后要一直保持，别关了
 
 3) 打开配置页面并保存至少一个 provider 的 API Key
 
@@ -59,10 +60,7 @@ npm start
 
 # 测试
 npm test
-
-# 类型检查
-npx tsc --noEmit
-```
+python3 test_proxy.py
 
 ## 许可
 
