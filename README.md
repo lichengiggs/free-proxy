@@ -29,7 +29,7 @@
 1) 克隆并安装依赖
 
 ```bash
-git clone https://github.com/lichengiggs/free_proxy.git
+git clone https://github.com/lichengiggs/free-proxy.git
 cd free_proxy
 npm install
 ```

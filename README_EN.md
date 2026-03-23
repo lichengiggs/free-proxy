@@ -27,7 +27,7 @@ One-line overview: free, easy to use, and enough for everyday OpenClaw usage.
 1) Clone and install dependencies
 
 ```bash
-git clone https://github.com/lichengiggs/free_proxy.git
+git clone https://github.com/lichengiggs/free-proxy.git
 cd free_proxy
 npm install
 ```
