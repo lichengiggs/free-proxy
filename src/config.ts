@@ -36,6 +36,26 @@ export interface CustomModel {
   lastVerifiedAt?: number;
 }
 
+export interface BudgetEnvConfig {
+  defaultInputTokens: number;
+  defaultOutputTokens: number;
+  summaryTriggerTokens: number;
+  toolOutputMaxChars: number;
+  providerInputOverrides: Record<string, number>;
+  providerOutputOverrides: Record<string, number>;
+  modelInputOverrides: Record<string, number>;
+  modelOutputOverrides: Record<string, number>;
+}
+
+export interface CircuitBreakerEnvConfig {
+  fallbackMaxAttempts: number;
+  modelFailureThreshold: number;
+  modelCooldownMs: number;
+  providerFailureThreshold: number;
+  providerCooldownMs: number;
+  healthTtlMs: number;
+}
+
 const CONFIG_PATH = 'config.json';
 const DEFAULT_CONFIG: Config = {
   default_model: 'openrouter/auto:free'
@@ -71,6 +91,26 @@ export async function setConfig(config: Partial<Config>): Promise<Config> {
   return newConfig;
 }
 
+function parseNumericRecord(value: string | undefined): Record<string, number> {
+  if (!value) return {};
+
+  try {
+    const parsed = JSON.parse(value) as Record<string, number | string>;
+    const result: Record<string, number> = {};
+
+    for (const [key, raw] of Object.entries(parsed)) {
+      const numberValue = typeof raw === 'number' ? raw : Number(raw);
+      if (Number.isFinite(numberValue) && numberValue > 0) {
+        result[key] = numberValue;
+      }
+    }
+
+    return result;
+  } catch {
+    return {};
+  }
+}
+
 export const ENV = {
   OPENROUTER_API_KEY: process.env.OPENROUTER_API_KEY || '',
   OPENROUTER_BASE_URL: process.env.OPENROUTER_BASE_URL || 'https://openrouter.ai/api/v1',
@@ -87,9 +127,44 @@ export const ENV = {
 function getRuntimeEnv<T extends string | number>(key: string, fallback: T): T {
   const value = process.env[key];
   if (typeof fallback === 'number') {
-    return (value ? Number(value) : fallback) as T;
+    const parsed = value ? Number(value) : fallback;
+    return (Number.isFinite(parsed) ? parsed : fallback) as T;
   }
   return (value || fallback) as T;
+}
+
+export function getNumericEnv(key: string, fallback: number): number {
+  return getRuntimeEnv(key, fallback);
+}
+
+export function getBudgetEnvConfig(): BudgetEnvConfig {
+  const defaultInputTokens = getNumericEnv('REQUEST_BUDGET_DEFAULT_INPUT_TOKENS', 12000);
+  const defaultOutputTokens = getNumericEnv('REQUEST_BUDGET_DEFAULT_OUTPUT_TOKENS', 1024);
+
+  return {
+    defaultInputTokens,
+    defaultOutputTokens,
+    summaryTriggerTokens: getNumericEnv(
+      'REQUEST_SUMMARY_TRIGGER_TOKENS',
+      Math.max(1000, Math.floor(defaultInputTokens * 0.8))
+    ),
+    toolOutputMaxChars: getNumericEnv('REQUEST_TOOL_OUTPUT_MAX_CHARS', 1200),
+    providerInputOverrides: parseNumericRecord(process.env.REQUEST_BUDGET_PROVIDER_INPUT_TOKENS),
+    providerOutputOverrides: parseNumericRecord(process.env.REQUEST_BUDGET_PROVIDER_OUTPUT_TOKENS),
+    modelInputOverrides: parseNumericRecord(process.env.REQUEST_BUDGET_MODEL_INPUT_TOKENS),
+    modelOutputOverrides: parseNumericRecord(process.env.REQUEST_BUDGET_MODEL_OUTPUT_TOKENS),
+  };
+}
+
+export function getCircuitBreakerEnvConfig(): CircuitBreakerEnvConfig {
+  return {
+    fallbackMaxAttempts: getNumericEnv('FALLBACK_MAX_ATTEMPTS', 6),
+    modelFailureThreshold: getNumericEnv('MODEL_CIRCUIT_BREAKER_FAILURE_THRESHOLD', 3),
+    modelCooldownMs: getNumericEnv('MODEL_CIRCUIT_BREAKER_COOLDOWN_MS', 30 * 60 * 1000),
+    providerFailureThreshold: getNumericEnv('PROVIDER_CIRCUIT_BREAKER_FAILURE_THRESHOLD', 3),
+    providerCooldownMs: getNumericEnv('PROVIDER_CIRCUIT_BREAKER_COOLDOWN_MS', 20 * 60 * 1000),
+    healthTtlMs: getNumericEnv('MODEL_HEALTH_TTL_MS', 24 * 60 * 60 * 1000),
+  };
 }
 
 async function hardenEnvFilePermissions(): Promise<void> {
