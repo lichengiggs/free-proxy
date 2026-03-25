@@ -24,8 +24,8 @@ class OpencodeConfigTests(unittest.TestCase):
                 self.assertTrue(status['isValid'])
 
                 content = status.get('content') or {}
-                provider = content.get('provider', {}).get('free_proxy', {})
-                self.assertEqual(provider.get('name'), 'free_proxy')
+                provider = content.get('provider', {}).get('free-proxy', {})
+                self.assertEqual(provider.get('name'), 'free-proxy')
                 self.assertEqual(provider.get('options', {}).get('baseURL'), 'http://localhost:8765/v1')
                 models = provider.get('models', {})
                 self.assertEqual(sorted(models.keys()), ['auto', 'coding'])
@@ -65,8 +65,45 @@ class OpencodeConfigTests(unittest.TestCase):
 
                 final = json.loads(config_path.read_text(encoding='utf-8'))
                 self.assertIn('other', final.get('provider', {}))
-                self.assertIn('free_proxy', final.get('provider', {}))
+                self.assertIn('free-proxy', final.get('provider', {}))
                 self.assertIn('instructions', final)
+            finally:
+                if old is None:
+                    os.environ.pop('OPENCODE_TEST_DIR', None)
+                else:
+                    os.environ['OPENCODE_TEST_DIR'] = old
+
+    def test_legacy_free_proxy_name_is_migrated(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            old = os.environ.get('OPENCODE_TEST_DIR')
+            os.environ['OPENCODE_TEST_DIR'] = tmp
+            try:
+                root = Path(tmp)
+                config_path = root / 'opencode.json'
+                root.mkdir(parents=True, exist_ok=True)
+                config_path.write_text(
+                    json.dumps(
+                        {
+                            'provider': {
+                                'free_proxy': {
+                                    'name': 'free_proxy',
+                                    'options': {'baseURL': 'http://localhost:8765/v1'},
+                                    'models': {'auto': {'name': 'auto'}},
+                                }
+                            }
+                        }
+                    ),
+                    encoding='utf-8',
+                )
+
+                result = configure_opencode_provider(port=8765)
+                self.assertTrue(result['success'])
+
+                final = json.loads(config_path.read_text(encoding='utf-8'))
+                providers = final.get('provider', {})
+                self.assertNotIn('free_proxy', providers)
+                self.assertIn('free-proxy', providers)
+                self.assertEqual(providers['free-proxy']['name'], 'free-proxy')
             finally:
                 if old is None:
                     os.environ.pop('OPENCODE_TEST_DIR', None)

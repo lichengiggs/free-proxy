@@ -276,7 +276,7 @@ class ServerApiTests(unittest.TestCase):
         self.assertTrue(body['success'])
 
         content = json.loads(Path(self.tmp.name, 'opencode.json').read_text(encoding='utf-8'))
-        provider = content['provider']['free_proxy']
+        provider = content['provider']['free-proxy']
         self.assertEqual(provider['options']['baseURL'], 'http://localhost:8765/v1')
         self.assertIn('coding', provider['models'])
 

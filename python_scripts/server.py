@@ -332,7 +332,7 @@ class ApiHandler(BaseHTTPRequestHandler):
                 self._send_json(400, result)
                 return
 
-            self._send_json(200, {'success': True, 'backup': result.get('backup'), 'message': '已写入 Opencode free_proxy provider'})
+            self._send_json(200, {'success': True, 'backup': result.get('backup'), 'message': '已写入 Opencode free-proxy provider'})
             return
 
         if parsed.path == '/api/restore-backup':

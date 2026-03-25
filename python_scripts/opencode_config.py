@@ -6,7 +6,8 @@ from pathlib import Path
 from typing import Any
 
 
-FREE_PROXY_PROVIDER_ID = 'free_proxy'
+FREE_PROXY_PROVIDER_ID = 'free-proxy'
+LEGACY_FREE_PROXY_PROVIDER_ID = 'free_proxy'
 
 
 def _opencode_dir() -> Path:
@@ -71,6 +72,11 @@ def configure_opencode_provider(*, port: int) -> dict[str, Any]:
     if not isinstance(provider_map, dict):
         provider_map = {}
         new_config['provider'] = provider_map
+
+    legacy = provider_map.get(LEGACY_FREE_PROXY_PROVIDER_ID)
+    if isinstance(legacy, dict) and FREE_PROXY_PROVIDER_ID not in provider_map:
+        provider_map[FREE_PROXY_PROVIDER_ID] = legacy
+    provider_map.pop(LEGACY_FREE_PROXY_PROVIDER_ID, None)
 
     provider_map[FREE_PROXY_PROVIDER_ID] = {
         'name': FREE_PROXY_PROVIDER_ID,

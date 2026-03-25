@@ -37,28 +37,23 @@
 - `free-proxy/auto`：通用入口，强调先跑起来。
 - `free-proxy/coding`：代码任务入口，优先给 coding agent / OpenClaw / Python SDK 使用。
 
-Python 服务端内部还兼容以下输入：
+Python 服务端内部仍保留对旧命名的兼容，但对外统一名称已经收敛为：
 
-- `auto`
-- `coding`
-- `free_proxy/auto`
-- `free_proxy/coding`
+- `free-proxy/auto`
+- `free-proxy/coding`
 
-其中带下划线的写法主要是为了兼容 Opencode 本地 provider 命名。
+`free_proxy/...` 现在只作为旧配置迁移兼容存在，不再作为文档推荐写法。
 
 ### 0.4 OpenClaw 与 Opencode 的关键差异
 
-这是当前最容易踩坑的点：
+当前已经统一成一个规则：
 
 - OpenClaw provider id：`free-proxy`
-- Opencode provider id：`free_proxy`
-
-也就是说：
-
+- Opencode provider id：`free-proxy`
 - OpenClaw 模型写法：`free-proxy/coding`
-- Opencode 模型写法：`free_proxy/coding`
+- Opencode 模型写法：`free-proxy/coding`
 
-这不是服务端协议差异，而是两个客户端本地配置命名约束不同。
+如果用户本地还残留 `free_proxy`，那是旧配置，需要迁移，不应再继续扩散。
 
 ### 0.5 当前配置写入行为
 
@@ -76,13 +71,13 @@ Python 服务端内部还兼容以下输入：
 
 `python_scripts/opencode_config.py` 现在会写入：
 
-- provider：`free_proxy`
+- provider：`free-proxy`
 - baseURL：`http://localhost:8765/v1`
 - models：`auto`、`coding`
 
 验证命令：
 
-    opencode run -m free_proxy/coding "Reply with exactly OK"
+    opencode run -m free-proxy/coding "Reply with exactly OK"
 
 ### 0.6 已完成真实验证
 
@@ -93,7 +88,7 @@ Python 服务端内部还兼容以下输入：
 - `npx tsc --noEmit`
 - `curl http://127.0.0.1:8765/v1/models`
 - `curl POST http://127.0.0.1:8765/v1/chat/completions` with `free-proxy/coding`
-- `opencode run -m free_proxy/coding "Reply with exactly OK"`
+- `opencode run -m free-proxy/coding "Reply with exactly OK"`
 - Python OpenAI SDK:
 
       from openai import OpenAI

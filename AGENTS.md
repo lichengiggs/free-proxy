@@ -30,7 +30,7 @@
 - Python 服务端需要兼容的别名输入：
   - `auto` / `coding`
   - `free-proxy/auto` / `free-proxy/coding`
-  - `free_proxy/auto` / `free_proxy/coding`
+  - `free_proxy/auto` / `free_proxy/coding`（仅旧配置迁移兼容，不再作为文档推荐写法）
 
 ## OpenClaw / Opencode 配置约定（长期有效）
 
@@ -42,9 +42,9 @@
 
 - Opencode 配置写入：
   - 文件：`python_scripts/opencode_config.py`
-  - provider id：`free_proxy`
+  - provider id：`free-proxy`
   - 写入模型：`auto`、`coding`
-  - 文档和验证命令必须使用 `free_proxy/...`，不要误写成 `free-proxy/...`。
+  - 文档、示例、验证命令统一使用 `free-proxy/...`。
 
 ## 本次 Longcat 接入沉淀（长期有效）
 
@@ -78,7 +78,7 @@
 - 用户文档必须优先覆盖三条真实使用路径：
   - OpenAI / Python SDK：`free-proxy/coding`
   - OpenClaw：`free-proxy/coding`
-  - Opencode：`free_proxy/coding`
+  - Opencode：`free-proxy/coding`
 
 ## 工具规范
 

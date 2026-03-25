@@ -1,13 +1,14 @@
 {
-  "name": "free_proxy",
+  "name": "free-proxy",
   "version": "1.0.0",
-  "description": "本地聚合多 provider 的免费模型代理服务，支持动态切换模型，无需修改客户端配置",
+  "description": "free-proxy（Python 主线）前端与历史静态测试工具集",
   "type": "module",
-  "main": "src/server.ts",
+  "main": "python_scripts/cli.py",
   "scripts": {
-    "dev": "tsx watch src/server.ts",
-    "start": "tsx src/server.ts",
-    "test": "node --experimental-vm-modules node_modules/jest/bin/jest.js",
+    "dev": "uv run free-proxy serve",
+    "start": "uv run free-proxy serve",
+    "test": "node --experimental-vm-modules node_modules/jest/bin/jest.js --config jest.web.config.js",
+    "test:legacy-ts": "node --experimental-vm-modules node_modules/jest/bin/jest.js --config jest.config.js",
     "update-models": "tsx scripts/update-models.js",
     "demo:params": "node scripts/demo-params-feasibility.mjs"
   },

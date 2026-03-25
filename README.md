@@ -69,10 +69,10 @@ uv run free-proxy serve   # 启动后端服务
   - 保守入口：`free-proxy/auto`
 
 - Opencode
-  - Provider ID 使用下划线：`free_proxy`
+  - Provider：`free-proxy`
   - 如果要写配置文件，路径通常是：`~/.config/opencode/opencode.json`
-  - 推荐命令：`opencode run -m free_proxy/coding "Reply with exactly OK"`
-  - 保守命令：`opencode run -m free_proxy/auto "Reply with exactly OK"`
+  - 推荐命令：`opencode run -m free-proxy/coding "Reply with exactly OK"`
+  - 保守命令：`opencode run -m free-proxy/auto "Reply with exactly OK"`
 
 ## 当前对外行为（与实现一致）
 
@@ -86,22 +86,23 @@ uv run free-proxy serve   # 启动后端服务
   - provider id：`free-proxy`
   - models：`auto`、`coding`
 - Opencode 配置写入：
-  - provider id：`free_proxy`
+  - provider id：`free-proxy`
   - models：`auto`、`coding`
 
 小白直接记住两条就够了：
 
 1. OpenAI / Python SDK / 通用兼容客户端：`free-proxy/coding`
-2. Opencode：`free_proxy/coding`
+2. Opencode：`free-proxy/coding`
 
 ## 常见问题
 
 - 网络错误：确认服务已启动（`uv run free-proxy serve`），使用 `http://localhost:8765`
 - 无可用模型：免费模型可能被临时限流，点"刷新模型列表"或手动添加可用模型
 - API Key 存放：本地 `.env`（不会上传）
-- Opencode 提示 `Model not found: free-proxy/coding`
-  - 原因：Opencode 本地 provider id 是 `free_proxy`，不是 `free-proxy`
-  - 用法：改成 `opencode run -m free_proxy/coding ...`
+- 旧版 Opencode 配置里如果出现 `free_proxy`
+  - 这是旧命名
+  - 当前统一名称是 `free-proxy`
+  - 重新执行一次配置写入后应统一为 `free-proxy`
 
 ## 开发命令
 

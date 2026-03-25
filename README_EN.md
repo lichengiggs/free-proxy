@@ -67,10 +67,10 @@ For beginners: keep this terminal open after startup.
   - Conservative fallback entry: `free-proxy/auto`
 
 - Opencode
-  - Provider ID uses underscore: `free_proxy`
+  - Provider ID: `free-proxy`
   - Config path is usually: `~/.config/opencode/opencode.json`
-  - Recommended command: `opencode run -m free_proxy/coding "Reply with exactly OK"`
-  - Conservative command: `opencode run -m free_proxy/auto "Reply with exactly OK"`
+  - Recommended command: `opencode run -m free-proxy/coding "Reply with exactly OK"`
+  - Conservative command: `opencode run -m free-proxy/auto "Reply with exactly OK"`
 
 ## Current external behavior
 
@@ -84,22 +84,23 @@ For beginners: keep this terminal open after startup.
   - provider: `free-proxy`
   - models: `auto`, `coding`
 - Opencode config writer creates:
-  - provider: `free_proxy`
+  - provider: `free-proxy`
   - models: `auto`, `coding`
 
 If you only want the shortest path:
 
 1. OpenAI / Python SDK / generic compatible clients: use `free-proxy/coding`
-2. Opencode: use `free_proxy/coding`
+2. Opencode: use `free-proxy/coding`
 
 ## FAQ
 
 - Network error: make sure the service is running with `uv run free-proxy serve`, then open `http://localhost:8765`
 - No available model: free models may be rate-limited temporarily; click **Refresh model list** or add a known-available model manually
 - Where keys are stored: local `.env` file only (not uploaded)
-- Opencode says `Model not found: free-proxy/coding`
-  - Cause: Opencode uses `free_proxy` as the local provider ID, not `free-proxy`
-  - Fix: run `opencode run -m free_proxy/coding ...`
+- If an older Opencode config still contains `free_proxy`
+  - That is the legacy name
+  - The unified name is now `free-proxy`
+  - Re-run config writing and use `free-proxy/...`
 
 ## Dev commands
 
