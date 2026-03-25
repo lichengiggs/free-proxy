@@ -57,11 +57,51 @@ uv run free-proxy serve   # 启动后端服务
 - 访问：`http://localhost:8765`
 - 保存 Key 后直接选择模型开始使用
 
+## 常用接入方式
+
+- OpenAI 兼容客户端 / Python SDK
+  - Base URL：`http://127.0.0.1:8765/v1`
+  - Model：`free-proxy/coding`（代码场景）或 `free-proxy/auto`（通用场景）
+
+- OpenClaw
+  - Provider：`free-proxy`
+  - 推荐模型：`free-proxy/coding`
+  - 保守入口：`free-proxy/auto`
+
+- Opencode
+  - Provider ID 使用下划线：`free_proxy`
+  - 如果要写配置文件，路径通常是：`~/.config/opencode/opencode.json`
+  - 推荐命令：`opencode run -m free_proxy/coding "Reply with exactly OK"`
+  - 保守命令：`opencode run -m free_proxy/auto "Reply with exactly OK"`
+
+## 当前对外行为（与实现一致）
+
+- 标准 OpenAI 兼容接口：
+  - `GET /v1/models`
+  - `POST /v1/chat/completions`
+- 对外稳定模型别名：
+  - `free-proxy/auto`
+  - `free-proxy/coding`
+- OpenClaw 配置写入：
+  - provider id：`free-proxy`
+  - models：`auto`、`coding`
+- Opencode 配置写入：
+  - provider id：`free_proxy`
+  - models：`auto`、`coding`
+
+小白直接记住两条就够了：
+
+1. OpenAI / Python SDK / 通用兼容客户端：`free-proxy/coding`
+2. Opencode：`free_proxy/coding`
+
 ## 常见问题
 
 - 网络错误：确认服务已启动（`uv run free-proxy serve`），使用 `http://localhost:8765`
 - 无可用模型：免费模型可能被临时限流，点"刷新模型列表"或手动添加可用模型
 - API Key 存放：本地 `.env`（不会上传）
+- Opencode 提示 `Model not found: free-proxy/coding`
+  - 原因：Opencode 本地 provider id 是 `free_proxy`，不是 `free-proxy`
+  - 用法：改成 `opencode run -m free_proxy/coding ...`
 
 ## 开发命令
 
@@ -80,7 +120,17 @@ uv run free-proxy probe --provider sambanova --model DeepSeek-V3-0324
 
 # 运行测试
 uv run python -m unittest discover -s python_scripts/tests -p 'test_*.py'
+
+# 前端/历史静态测试
+# （首次执行前先 npm install）
+npm test
 ```
+
+## 历史方案
+
+- TypeScript 后端方案已归档为历史参考，不再作为主运行路径。
+- 历史说明见：`docs/typescript-legacy.md`
+- 迁移发布说明见：`docs/migration-python-mainline.md`
 
 ## 许可
 

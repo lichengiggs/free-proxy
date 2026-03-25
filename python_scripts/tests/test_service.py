@@ -12,9 +12,11 @@ from python_scripts.service import ProxyService, choose_candidates
 class FakeTransport:
     def __init__(self) -> None:
         self.calls: list[tuple[str, str]] = []
+        self.timeouts: list[int] = []
 
     def request(self, method: str, url: str, headers=None, body=None, timeout: int = 30):
         self.calls.append((method, url))
+        self.timeouts.append(timeout)
         if url.endswith('/models'):
             return 200, {}, json.dumps({'data': [{'id': 'ok-model'}]}).encode()
         return 200, {}, json.dumps({'choices': [{'message': {'content': 'ok'}}]}).encode()
@@ -77,6 +79,12 @@ class ServiceTests(unittest.TestCase):
         self.assertTrue(result.ok)
         self.assertEqual(result.content, 'ok')
         self.assertEqual(result.actual_model, 'ok-model')
+
+    def test_request_timeout_is_propagated_to_client_transport(self) -> None:
+        transport = FakeTransport()
+        service = ProxyService(transport=transport, request_timeout_seconds=7)
+        service.probe('openrouter', 'ok-model')
+        self.assertTrue(any(value == 7 for value in transport.timeouts))
 
     def test_choose_candidates_prefers_recent_healthy_then_hints(self) -> None:
         health = {
@@ -159,3 +167,32 @@ class ServiceTests(unittest.TestCase):
             self.assertFalse(verify['ok'])
             self.assertEqual(verify['category'], 'rate_limit')
             self.assertTrue(bool(verify.get('suggestion')))
+
+    def test_public_models_exposes_auto_and_coding_aliases(self) -> None:
+        service = ProxyService(transport=FakeTransport())
+        models = service.public_models()
+        ids = [item['id'] for item in models]
+        self.assertIn('free-proxy/auto', ids)
+        self.assertIn('free-proxy/coding', ids)
+
+    def test_resolve_alias_candidates_prefers_opencode_for_coding(self) -> None:
+        old_openrouter = os.environ.get('OPENROUTER_API_KEY')
+        old_opencode = os.environ.get('OPENCODE_API_KEY')
+        os.environ['OPENROUTER_API_KEY'] = 'test-openrouter'
+        os.environ['OPENCODE_API_KEY'] = 'test-opencode'
+        try:
+            service = ProxyService(transport=FakeTransport())
+            candidates = service.resolve_alias_candidates('coding')
+            self.assertGreaterEqual(len(candidates), 2)
+            self.assertEqual(candidates[0][0], 'opencode')
+            self.assertEqual(candidates[0][1], 'auto')
+            self.assertIn(('openrouter', 'openrouter/auto:free'), candidates)
+        finally:
+            if old_openrouter is None:
+                os.environ.pop('OPENROUTER_API_KEY', None)
+            else:
+                os.environ['OPENROUTER_API_KEY'] = old_openrouter
+            if old_opencode is None:
+                os.environ.pop('OPENCODE_API_KEY', None)
+            else:
+                os.environ['OPENCODE_API_KEY'] = old_opencode

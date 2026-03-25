@@ -27,6 +27,8 @@ class OpenClawConfigTests(unittest.TestCase):
                 providers = content.get('models', {}).get('providers', {})
                 self.assertIn('free-proxy', providers)
                 self.assertEqual(providers['free-proxy']['baseUrl'], 'http://localhost:8765/v1')
+                models = providers['free-proxy']['models']
+                self.assertEqual([item['id'] for item in models], ['auto', 'coding'])
             finally:
                 if old is None:
                     os.environ.pop('OPENCLAW_TEST_DIR', None)

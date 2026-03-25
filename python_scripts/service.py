@@ -27,6 +27,23 @@ class ProbeResult:
     suggestion: str | None = None
 
 
+@dataclass
+class RawCompletionResult:
+    ok: bool
+    status: int
+    headers: dict[str, str]
+    body: bytes
+    error: str | None = None
+    category: str | None = None
+    suggestion: str | None = None
+
+
+PUBLIC_MODEL_ALIASES: tuple[dict[str, str], ...] = (
+    {'id': 'free-proxy/auto', 'object': 'model', 'owned_by': 'free-proxy'},
+    {'id': 'free-proxy/coding', 'object': 'model', 'owned_by': 'free-proxy'},
+)
+
+
 def choose_candidates(
     *,
     provider: str,
@@ -64,22 +81,85 @@ def choose_candidates(
 
 
 class ProxyService:
-    def __init__(self, *, transport: Transport | None = None, health_path: Path | None = None, health_ttl_seconds: int = 600, dotenv_path: Path | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        transport: Transport | None = None,
+        health_path: Path | None = None,
+        health_ttl_seconds: int = 600,
+        dotenv_path: Path | None = None,
+        request_timeout_seconds: int = 12,
+    ) -> None:
         self.dotenv_path = dotenv_path or DOTENV_PATH
         hydrate_env(self.dotenv_path)
         self.transport = transport
         self.health_path = health_path
         self.health_ttl_seconds = health_ttl_seconds
+        self.request_timeout_seconds = request_timeout_seconds
 
     def available_providers(self) -> list[str]:
         return configured_provider_names()
+
+    def public_models(self) -> list[dict[str, str]]:
+        return [dict(item) for item in PUBLIC_MODEL_ALIASES]
+
+    def resolve_alias_candidates(self, alias_name: str) -> list[tuple[str, str]]:
+        alias = alias_name.strip().lower()
+        configured = self.available_providers()
+        ordered: list[tuple[str, str]] = []
+
+        def add(provider_name: str, model_id: str) -> None:
+            if provider_name not in configured:
+                return
+            pair = (provider_name, model_id)
+            if pair not in ordered:
+                ordered.append(pair)
+
+        if alias == 'coding':
+            add('opencode', 'auto')
+            add('openrouter', 'openrouter/auto:free')
+            add('github', 'openai/gpt-4.1-mini')
+            add('groq', 'openai/gpt-oss-20b')
+            add('mistral', 'mistral-small-latest')
+            add('cerebras', 'qwen-3-coder-480b')
+            add('sambanova', 'DeepSeek-V3-0324')
+            add('longcat', 'deepseek-v3.1')
+        else:
+            add('openrouter', 'openrouter/auto:free')
+            add('opencode', 'auto')
+            add('github', 'openai/gpt-4.1-mini')
+            add('groq', 'openai/gpt-oss-20b')
+            add('mistral', 'mistral-small-latest')
+            add('cerebras', 'qwen-3-coder-480b')
+            add('sambanova', 'DeepSeek-V3-0324')
+            add('longcat', 'deepseek-v3.1')
+
+        if ordered:
+            return ordered
+
+        fallback_order = ['openrouter', 'opencode', 'github', 'groq', 'mistral', 'cerebras', 'sambanova', 'longcat']
+        for provider_name in fallback_order:
+            if provider_name not in configured:
+                continue
+            hints = get_provider_model_hints(provider_name)
+            if alias != 'coding':
+                add(provider_name, 'auto')
+            if hints:
+                add(provider_name, hints[0])
+
+        return ordered
 
     def provider_client(self, provider_name: str) -> ProviderClient:
         spec = get_provider_spec(provider_name)
         api_key = os.environ.get(spec.api_key_env, '').strip()
         if not api_key:
             raise ProviderError(f'{provider_name} 没有配置 API Key')
-        return ProviderClient(spec=spec, api_key=api_key, transport=self.transport)
+        return ProviderClient(
+            spec=spec,
+            api_key=api_key,
+            transport=self.transport,
+            request_timeout_seconds=self.request_timeout_seconds,
+        )
 
     @staticmethod
     def _mask_key(value: str) -> str:
@@ -263,3 +343,36 @@ class ProxyService:
             except ProviderError as exc:
                 providers.append({'provider': provider_name, 'error': str(exc), 'models': []})
         return {'providers': providers}
+
+    def chat_completions_raw(self, provider_name: str, model_id: str, payload: dict[str, Any]) -> RawCompletionResult:
+        client = self.provider_client(provider_name)
+        request_payload = dict(payload)
+        request_payload['model'] = model_id
+        try:
+            status, headers, body = client.chat_completions_raw(request_payload)
+        except ProviderError as exc:
+            category = classify_error(0, str(exc)).category
+            return RawCompletionResult(
+                ok=False,
+                status=502,
+                headers={},
+                body=b'',
+                error=str(exc),
+                category=category,
+                suggestion=remediation_suggestion(category, provider_name),
+            )
+
+        if status < 400:
+            return RawCompletionResult(ok=True, status=status, headers=headers, body=body)
+
+        text = body.decode('utf-8', errors='ignore')
+        failure = classify_error(status, text)
+        return RawCompletionResult(
+            ok=False,
+            status=status,
+            headers=headers,
+            body=body,
+            error=text or f'upstream status {status}',
+            category=failure.category,
+            suggestion=remediation_suggestion(failure.category, provider_name),
+        )

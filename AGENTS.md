@@ -19,6 +19,33 @@
   - 服务编排：`python_scripts/service.py`
   - 前端卡片：`python_scripts/web/index.html`
 
+## 当前对外兼容面（长期有效）
+
+- OpenAI 兼容接口必须保持：
+  - `GET /v1/models`
+  - `POST /v1/chat/completions`
+- 当前公开稳定模型别名：
+  - `free-proxy/auto`
+  - `free-proxy/coding`
+- Python 服务端需要兼容的别名输入：
+  - `auto` / `coding`
+  - `free-proxy/auto` / `free-proxy/coding`
+  - `free_proxy/auto` / `free_proxy/coding`
+
+## OpenClaw / Opencode 配置约定（长期有效）
+
+- OpenClaw 配置写入：
+  - 文件：`python_scripts/openclaw_config.py`
+  - provider id：`free-proxy`
+  - 写入模型：`auto`、`coding`
+  - 默认主模型仍保持 `free-proxy/auto`，避免破坏旧用户习惯。
+
+- Opencode 配置写入：
+  - 文件：`python_scripts/opencode_config.py`
+  - provider id：`free_proxy`
+  - 写入模型：`auto`、`coding`
+  - 文档和验证命令必须使用 `free_proxy/...`，不要误写成 `free-proxy/...`。
+
 ## 本次 Longcat 接入沉淀（长期有效）
 
 - Longcat 走 OpenAI 兼容入口：`https://api.longcat.chat/openai`。
@@ -48,6 +75,10 @@
 
 - 复杂功能或重构先写执行计划，规范见 `.agent/PLANS.md`。
 - 执行计划属于过程文档，任务完成后应清理；结论沉淀到长期文档。
+- 用户文档必须优先覆盖三条真实使用路径：
+  - OpenAI / Python SDK：`free-proxy/coding`
+  - OpenClaw：`free-proxy/coding`
+  - Opencode：`free_proxy/coding`
 
 ## 工具规范
 

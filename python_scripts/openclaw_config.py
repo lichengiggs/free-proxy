@@ -8,7 +8,9 @@ from typing import Any
 FREE_PROXY_PROVIDER_ID = 'free-proxy'
 LEGACY_FREE_PROXY_PROVIDER_ID = 'free_proxy'
 FREE_PROXY_MODEL_ID = 'auto'
+FREE_PROXY_CODING_MODEL_ID = 'coding'
 FREE_PROXY_AGENT_MODEL = 'free-proxy/auto'
+FREE_PROXY_CODING_AGENT_MODEL = 'free-proxy/coding'
 LEGACY_FREE_PROXY_AGENT_MODEL = 'free_proxy/auto'
 
 
@@ -111,7 +113,10 @@ def _ensure_free_proxy_provider(config: dict[str, Any], port: int) -> None:
         'baseUrl': f'http://localhost:{port}/v1',
         'apiKey': 'any_string',
         'api': 'openai-completions',
-        'models': [{'id': FREE_PROXY_MODEL_ID, 'name': FREE_PROXY_MODEL_ID}],
+        'models': [
+            {'id': FREE_PROXY_MODEL_ID, 'name': FREE_PROXY_MODEL_ID},
+            {'id': FREE_PROXY_CODING_MODEL_ID, 'name': FREE_PROXY_CODING_MODEL_ID},
+        ],
     }
 
 
@@ -119,6 +124,7 @@ def _ensure_agent_allowlist(config: dict[str, Any]) -> None:
     with_root = _ensure_root(config)
     allow_models = with_root['agents']['defaults']['models']
     allow_models[FREE_PROXY_AGENT_MODEL] = allow_models.get(FREE_PROXY_AGENT_MODEL, {})
+    allow_models[FREE_PROXY_CODING_AGENT_MODEL] = allow_models.get(FREE_PROXY_CODING_AGENT_MODEL, {})
 
 
 def _apply_default_mode(config: dict[str, Any]) -> None:
