@@ -123,7 +123,7 @@ class ProxyService:
             add('mistral', 'mistral-small-latest')
             add('cerebras', 'qwen-3-coder-480b')
             add('sambanova', 'DeepSeek-V3-0324')
-            add('longcat', 'deepseek-v3.1')
+            add('longcat', 'LongCat-Flash-Chat')
         else:
             add('openrouter', 'openrouter/auto:free')
             add('opencode', 'auto')
@@ -132,7 +132,7 @@ class ProxyService:
             add('mistral', 'mistral-small-latest')
             add('cerebras', 'qwen-3-coder-480b')
             add('sambanova', 'DeepSeek-V3-0324')
-            add('longcat', 'deepseek-v3.1')
+            add('longcat', 'LongCat-Flash-Chat')
 
         if ordered:
             return ordered
