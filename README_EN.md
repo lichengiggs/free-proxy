@@ -42,26 +42,54 @@ git pull --ff-only
 
 2) Install [uv](https://docs.astral.sh/uv/) (if you don't have it yet)
 
-```bash
-# macOS / Linux
-curl -LsSf https://astral.sh/uv/install.sh | sh
+macOS / Linux:
 
-# or Homebrew
+```bash
+curl -LsSf https://astral.sh/uv/install.sh | sh
+```
+
+Homebrew:
+
+```bash
 brew install uv
 ```
 
-3) Sync dependencies and start
+3) Go back to the repo root
+
+The next step must run inside the `free-proxy` repo root, where `pyproject.toml` is present.
+
+```bash
+cd free-proxy
+```
+
+If you are not sure whether you are in the right directory, run this first:
+
+```bash
+pwd
+ls pyproject.toml
+```
+
+If the second command says the file is missing, you are not in the repo root yet. Go back to `free-proxy` first.
+
+4) Sync dependencies
 
 ```bash
 uv sync
-uv run free-proxy serve
 ```
+
+If you see `No pyproject.toml found in current directory or any parent directory`, the project is not broken. You are just running the command outside the repo root.
 
 If you are updating from an older version, run `uv sync` again after `git pull --ff-only`.
 
+5) Start the service
+
+```bash
+uv run free-proxy serve
+```
+
 For beginners: keep this terminal open after startup.
 
-4) Open the setup page and save at least one provider API key
+6) Open the setup page and save at least one provider API key
 
 - Visit: `http://localhost:8765`
 - After saving a key, start with a recommended model, then click verify or send a quick test request.
@@ -128,6 +156,8 @@ If you only want the shortest path:
 
 - Network error: make sure `uv run free-proxy serve` is still running, then open `http://localhost:8765`
 - Update issues after pulling: run `git pull --ff-only`, then `uv sync`
+- `uv sync` says it cannot find `pyproject.toml`: you are in the wrong directory; run `cd free-proxy` first, then confirm with `ls pyproject.toml`
+- zsh errors after using GitHub's copy button: copy only the commands inside the code block, not the explanatory text outside it
 - No available model: free models may be rate-limited temporarily; click **Refresh model list** first, then try another recommended model
 - Where keys are stored: local `.env` file only (not uploaded)
 - If an older Opencode config still contains `free_proxy`
@@ -137,24 +167,39 @@ If you only want the shortest path:
 
 ## Dev commands
 
+Start backend:
+
 ```bash
-# start backend
 uv run free-proxy serve
+```
 
-# list subcommands
+List subcommands:
+
+```bash
 uv run free-proxy --help
+```
 
-# list models
+List models:
+
+```bash
 uv run free-proxy models --provider sambanova
+```
 
-# probe one model
+Probe one model:
+
+```bash
 uv run free-proxy probe --provider sambanova --model DeepSeek-V3-0324
+```
 
-# python tests
+Run Python tests:
+
+```bash
 uv run python -m unittest discover -s python_scripts/tests -p 'test_*.py'
+```
 
-# frontend/legacy static tests
-# (run npm install first if dependencies are missing)
+Frontend / legacy static tests (run `npm install` first if needed):
+
+```bash
 npm test
 ```
 

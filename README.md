@@ -42,26 +42,54 @@ git pull --ff-only
 
 2) 安装 [uv](https://docs.astral.sh/uv/)（如果还没有）
 
-```bash
-# macOS / Linux
-curl -LsSf https://astral.sh/uv/install.sh | sh
+macOS / Linux：
 
-# 或者用 Homebrew
+```bash
+curl -LsSf https://astral.sh/uv/install.sh | sh
+```
+
+Homebrew：
+
+```bash
 brew install uv
 ```
 
-3) 初始化依赖并启动
+3) 回到仓库根目录
+
+下面这一步必须在 `free-proxy` 仓库根目录执行，也就是当前目录里能看到 `pyproject.toml`。
 
 ```bash
-uv sync                   # 首次运行，自动创建虚拟环境
-uv run free-proxy serve   # 启动后端服务
+cd free-proxy
 ```
+
+如果你不确定自己现在是不是在对的目录，先执行：
+
+```bash
+pwd
+ls pyproject.toml
+```
+
+如果第二条命令提示找不到文件，说明你当前不在仓库根目录。先切回 `free-proxy` 目录，再继续。
+
+4) 初始化依赖
+
+```bash
+uv sync
+```
+
+如果这里出现 `No pyproject.toml found in current directory or any parent directory`，不是项目坏了，而是你不在仓库根目录。
 
 如果你是更新老版本，进入仓库后重新执行一次 `uv sync`，把新依赖和脚本同步到本地。
 
+5) 启动服务
+
+```bash
+uv run free-proxy serve
+```
+
 小白提示：启动后请保持这个窗口打开，不要关闭。
 
-4) 打开配置页面并保存至少一个 provider 的 API Key
+6) 打开配置页面并保存至少一个 provider 的 API Key
 
 - 访问：`http://localhost:8765`
 - 保存 Key 后，优先选推荐模型，再点一次验证或直接发一条测试请求。
@@ -129,6 +157,8 @@ print(resp.choices[0].message.content)
 
 - 网络错误：先确认服务还在运行（`uv run free-proxy serve`），再访问 `http://localhost:8765`
 - 更新后启动失败：先执行 `git pull --ff-only`，再执行 `uv sync`
+- `uv sync` 提示找不到 `pyproject.toml`：说明你不在仓库根目录，先执行 `cd free-proxy`，再用 `ls pyproject.toml` 确认当前目录正确
+- 从 GitHub 一键复制命令后在 zsh 报错：只复制代码块里的命令，不要把代码块外的解释文字一起复制
 - 无可用模型：免费模型可能被临时限流，先点“刷新模型列表”，再换一个推荐模型重试
 - API Key 存放：本地 `.env`（不会上传）
 - 旧版 Opencode 配置里如果出现 `free_proxy`
@@ -138,24 +168,39 @@ print(resp.choices[0].message.content)
 
 ## 开发命令
 
+启动服务：
+
 ```bash
-# 启动服务
 uv run free-proxy serve
+```
 
-# 查看所有子命令
+查看所有子命令：
+
+```bash
 uv run free-proxy --help
+```
 
-# 列出某 provider 的模型
+列出某 provider 的模型：
+
+```bash
 uv run free-proxy models --provider sambanova
+```
 
-# 探测某模型可用性
+探测某模型可用性：
+
+```bash
 uv run free-proxy probe --provider sambanova --model DeepSeek-V3-0324
+```
 
-# 运行测试
+运行测试：
+
+```bash
 uv run python -m unittest discover -s python_scripts/tests -p 'test_*.py'
+```
 
-# 前端/历史静态测试
-# （首次执行前先 npm install）
+前端 / 历史静态测试（首次执行前先 `npm install`）：
+
+```bash
 npm test
 ```
 
