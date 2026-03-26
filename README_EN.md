@@ -14,6 +14,8 @@ One-line overview: free, easy to use, and enough for everyday OpenClaw usage.
 | US paid coding plan | High | About 200–10,000 requests/month | 20-200USD/month |
 | China paid coding plan | High | Lite 18,000 requests/month<br>Pro 90,000 requests/month | 20-200RMB/month |
 
+Note: [Longcat](https://longcat.chat/platform/api-keys) currently offers about 50 million tokens/day on `LongCat-Flash-Lite`, so it is a strong first choice.
+
 ## Core features
 
 - Aggregates 9 providers: OpenRouter / Groq / OpenCode / Longcat / Gemini / GitHub Models / Mistral / Cerebras / SambaNova
@@ -24,11 +26,18 @@ One-line overview: free, easy to use, and enough for everyday OpenClaw usage.
 
 ## Quick start
 
-1) Clone the repository
+1) First install: clone the repository
 
 ```bash
 git clone https://github.com/lichengiggs/free-proxy.git
 cd free-proxy
+```
+
+If you already cloned this repo before, updating is just:
+
+```bash
+cd free-proxy
+git pull --ff-only
 ```
 
 2) Install [uv](https://docs.astral.sh/uv/) (if you don't have it yet)
@@ -41,25 +50,28 @@ curl -LsSf https://astral.sh/uv/install.sh | sh
 brew install uv
 ```
 
-3) Initialize and start
+3) Sync dependencies and start
 
 ```bash
 uv sync
 uv run free-proxy serve
 ```
 
+If you are updating from an older version, run `uv sync` again after `git pull --ff-only`.
+
 For beginners: keep this terminal open after startup.
 
 4) Open the setup page and save at least one provider API key
 
 - Visit: `http://localhost:8765`
-- After saving a key, you can pick a model and start using it
+- After saving a key, start with a recommended model, then click verify or send a quick test request.
 
 ## Common integrations
 
 - OpenAI-compatible clients / Python SDK
   - Base URL: `http://127.0.0.1:8765/v1`
-  - Model: `free-proxy/coding` for coding tasks, or `free-proxy/auto` for general use
+  - Model: `free-proxy/auto` for the easiest default
+  - If your main use case is coding, switch to `free-proxy/coding`
   - Minimal example:
 
 ```python
@@ -71,7 +83,7 @@ client = OpenAI(
 )
 
 resp = client.chat.completions.create(
-    model="free-proxy/coding",
+    model="free-proxy/auto",
     messages=[{"role": "user", "content": "Reply with exactly OK"}],
 )
 
@@ -82,15 +94,15 @@ print(resp.choices[0].message.content)
   - Provider ID: `free-proxy`
   - Base URL: `http://localhost:8765/v1`
   - Models: `auto`, `coding`
-  - Recommended model: `free-proxy/coding`
-  - Conservative fallback entry: `free-proxy/auto`
+  - Default first choice: `free-proxy/auto`
+  - Switch to `free-proxy/coding` if you mainly use it for coding
 
 - Opencode
   - Provider ID: `free-proxy`
   - Config path is usually: `~/.config/opencode/opencode.json`
   - Base URL: `http://localhost:8765/v1`
-  - Recommended command: `opencode run -m free-proxy/coding "Reply with exactly OK"`
-  - Conservative command: `opencode run -m free-proxy/auto "Reply with exactly OK"`
+  - Default command: `opencode run -m free-proxy/auto "Reply with exactly OK"`
+  - Coding command: `opencode run -m free-proxy/coding "Reply with exactly OK"`
 
 ## Current external behavior
 
@@ -109,13 +121,14 @@ print(resp.choices[0].message.content)
 
 If you only want the shortest path:
 
-1. OpenAI / Python SDK / generic compatible clients: use `free-proxy/coding`
-2. Opencode: use `free-proxy/coding`
+1. When you are not sure which model to use, start with `free-proxy/auto`
+2. If you mainly use it for coding, switch to `free-proxy/coding`
 
 ## FAQ
 
-- Network error: make sure the service is running with `uv run free-proxy serve`, then open `http://localhost:8765`
-- No available model: free models may be rate-limited temporarily; click **Refresh model list** or add a known-available model manually
+- Network error: make sure `uv run free-proxy serve` is still running, then open `http://localhost:8765`
+- Update issues after pulling: run `git pull --ff-only`, then `uv sync`
+- No available model: free models may be rate-limited temporarily; click **Refresh model list** first, then try another recommended model
 - Where keys are stored: local `.env` file only (not uploaded)
 - If an older Opencode config still contains `free_proxy`
   - That is the legacy name

@@ -14,7 +14,7 @@
 | 美国付费 coding plan | 高 | 约 200–10,000 次/月 | 20-200USD/月 |
 | 国内付费 coding plan | 高 | Lite 18,000 次/月<br>Pro 90,000 次/月 | 20-200RMB/月 |
 
-
+注：[美团龙猫](https://longcat.chat/platform/api-keys) 当前的 `LongCat-Flash-Lite` 提供约 5000 万 token/天，量大管饱，建议优先尝试。
 
 ## 核心功能
 
@@ -26,11 +26,18 @@
 
 ## 快速开始
 
-1) 克隆仓库
+1) 首次安装：克隆仓库
 
 ```bash
 git clone https://github.com/lichengiggs/free-proxy.git
 cd free-proxy
+```
+
+如果你之前已经拉过这个仓库，后续更新用下面两条就够了：
+
+```bash
+cd free-proxy
+git pull --ff-only
 ```
 
 2) 安装 [uv](https://docs.astral.sh/uv/)（如果还没有）
@@ -43,25 +50,28 @@ curl -LsSf https://astral.sh/uv/install.sh | sh
 brew install uv
 ```
 
-3) 初始化环境并启动
+3) 初始化依赖并启动
 
 ```bash
 uv sync                   # 首次运行，自动创建虚拟环境
 uv run free-proxy serve   # 启动后端服务
 ```
 
+如果你是更新老版本，进入仓库后重新执行一次 `uv sync`，把新依赖和脚本同步到本地。
+
 小白提示：启动后请保持这个窗口打开，不要关闭。
 
 4) 打开配置页面并保存至少一个 provider 的 API Key
 
 - 访问：`http://localhost:8765`
-- 保存 Key 后直接选择模型开始使用
+- 保存 Key 后，优先选推荐模型，再点一次验证或直接发一条测试请求。
 
 ## 常用接入方式
 
 - OpenAI 兼容客户端 / Python SDK
   - Base URL：`http://127.0.0.1:8765/v1`
-  - Model：`free-proxy/coding`（代码场景）或 `free-proxy/auto`（通用场景）
+  - Model：`free-proxy/auto`（最省心，适合绝大多数情况）
+  - 如果你主要拿它写代码，再换成 `free-proxy/coding`
   - 最小示例：
 
 ```python
@@ -73,7 +83,7 @@ client = OpenAI(
 )
 
 resp = client.chat.completions.create(
-    model="free-proxy/coding",
+    model="free-proxy/auto",
     messages=[{"role": "user", "content": "Reply with exactly OK"}],
 )
 
@@ -84,15 +94,15 @@ print(resp.choices[0].message.content)
   - Provider：`free-proxy`
   - Base URL：`http://localhost:8765/v1`
   - 模型：`auto`、`coding`
-  - 推荐模型：`free-proxy/coding`
-  - 保守入口：`free-proxy/auto`
+  - 默认先用：`free-proxy/auto`
+  - 如果主要做代码任务，再切到：`free-proxy/coding`
 
 - Opencode
   - Provider：`free-proxy`
   - 如果要写配置文件，路径通常是：`~/.config/opencode/opencode.json`
   - Base URL：`http://localhost:8765/v1`
-  - 推荐命令：`opencode run -m free-proxy/coding "Reply with exactly OK"`
-  - 保守命令：`opencode run -m free-proxy/auto "Reply with exactly OK"`
+  - 默认命令：`opencode run -m free-proxy/auto "Reply with exactly OK"`
+  - 代码任务命令：`opencode run -m free-proxy/coding "Reply with exactly OK"`
 
 ## 当前对外行为（与实现一致）
 
@@ -109,15 +119,17 @@ print(resp.choices[0].message.content)
   - provider id：`free-proxy`
   - models：`auto`、`coding`
 
-小白直接记住两条就够了：
+小白直接记住一条就够了：
 
-1. OpenAI / Python SDK / 通用兼容客户端：`free-proxy/coding`
-2. Opencode：`free-proxy/coding`
+1. 不确定用什么模型时，先用：`free-proxy/auto`
+
+如果你主要拿它写代码，再换成：`free-proxy/coding`
 
 ## 常见问题
 
-- 网络错误：确认服务已启动（`uv run free-proxy serve`），使用 `http://localhost:8765`
-- 无可用模型：免费模型可能被临时限流，点"刷新模型列表"或手动添加可用模型
+- 网络错误：先确认服务还在运行（`uv run free-proxy serve`），再访问 `http://localhost:8765`
+- 更新后启动失败：先执行 `git pull --ff-only`，再执行 `uv sync`
+- 无可用模型：免费模型可能被临时限流，先点“刷新模型列表”，再换一个推荐模型重试
 - API Key 存放：本地 `.env`（不会上传）
 - 旧版 Opencode 配置里如果出现 `free_proxy`
   - 这是旧命名
