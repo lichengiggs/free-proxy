@@ -13,6 +13,10 @@ DEFAULT_POLICY = {
     'github': TokenPolicy(max_input_chars=6000, reserve_output_tokens=256),
     'groq': TokenPolicy(max_input_chars=12000, reserve_output_tokens=384),
     'openrouter': TokenPolicy(max_input_chars=16000, reserve_output_tokens=512),
+    'longcat': TokenPolicy(max_input_chars=24000, reserve_output_tokens=1024),
+    'gemini': TokenPolicy(max_input_chars=24000, reserve_output_tokens=1024),
+    'mistral': TokenPolicy(max_input_chars=24000, reserve_output_tokens=1024),
+    'sambanova': TokenPolicy(max_input_chars=24000, reserve_output_tokens=1024),
 }
 
 PROBE_OUTPUT_TOKENS = 32
@@ -29,5 +33,5 @@ def trim_prompt(provider: str, text: str) -> str:
 
 
 def response_token_budget(provider: str) -> int:
-    policy = DEFAULT_POLICY.get(provider, TokenPolicy(max_input_chars=8000, reserve_output_tokens=256))
+    policy = DEFAULT_POLICY.get(provider, TokenPolicy(max_input_chars=8000, reserve_output_tokens=4096))
     return policy.reserve_output_tokens

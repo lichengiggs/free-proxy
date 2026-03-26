@@ -164,7 +164,7 @@ class ApiHandler(BaseHTTPRequestHandler):
         if not configured:
             return None, {'message': 'no configured providers found, please save at least one API key first', 'type': 'invalid_request_error'}, 400
 
-        priority = ['openrouter', 'opencode', 'github', 'groq', 'gemini', 'longcat', 'mistral', 'cerebras', 'sambanova']
+        priority = ['longcat', 'gemini', 'github', 'mistral', 'sambanova', 'openrouter', 'groq', 'nvidia']
         primary_provider = next((provider for provider in priority if provider in configured), configured[0])
         candidates = ['auto', *get_provider_model_hints(primary_provider)]
 

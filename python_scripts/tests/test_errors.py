@@ -10,6 +10,8 @@ class ErrorTests(unittest.TestCase):
         self.assertEqual(classify_error(0, 'invalid api key').category, 'auth')
         self.assertEqual(classify_error(0, 'quota exceeded').category, 'quota')
         self.assertEqual(classify_error(0, 'model not found').category, 'model_not_found')
+        self.assertEqual(classify_error(400, 'maximum context length is 8192 tokens').category, 'token_limit')
+        self.assertEqual(classify_error(400, 'maxOutputTokens too large').category, 'token_limit')
 
     def test_remediation_suggestion_returns_actionable_text(self) -> None:
         self.assertIn('API Key', remediation_suggestion('auth', 'groq'))

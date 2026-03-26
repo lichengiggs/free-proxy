@@ -11,6 +11,8 @@ from .config import DOTENV_PATH, ProviderSpec, configured_provider_names, get_pr
 from .env_store import upsert_env
 from .errors import classify_error, remediation_suggestion
 from .health_store import load_health, upsert_health
+from .token_budgeting import resolve_token_budget, shrink_budget_after_limit_error
+from .token_limit_store import load_token_limits, upsert_token_limit
 from .token_policy import PROBE_OUTPUT_TOKENS, response_token_budget, trim_prompt
 
 
@@ -86,6 +88,7 @@ class ProxyService:
         *,
         transport: Transport | None = None,
         health_path: Path | None = None,
+        token_limit_path: Path | None = None,
         health_ttl_seconds: int = 600,
         dotenv_path: Path | None = None,
         request_timeout_seconds: int = 12,
@@ -94,6 +97,7 @@ class ProxyService:
         hydrate_env(self.dotenv_path)
         self.transport = transport
         self.health_path = health_path
+        self.token_limit_path = token_limit_path
         self.health_ttl_seconds = health_ttl_seconds
         self.request_timeout_seconds = request_timeout_seconds
 
@@ -116,28 +120,28 @@ class ProxyService:
                 ordered.append(pair)
 
         if alias == 'coding':
-            add('opencode', 'auto')
+            add('longcat', 'LongCat-Flash-Lite')
+            add('gemini', 'gemini-3.1-flash-lite-preview')
+            add('github', 'gpt-4o')
+            add('mistral', 'mistral-large-latest')
+            add('sambanova', 'DeepSeek-V3.1-Terminus')
             add('openrouter', 'openrouter/auto:free')
-            add('github', 'openai/gpt-4.1-mini')
-            add('groq', 'openai/gpt-oss-20b')
-            add('mistral', 'mistral-small-latest')
-            add('cerebras', 'qwen-3-coder-480b')
-            add('sambanova', 'DeepSeek-V3-0324')
-            add('longcat', 'deepseek-v3.1')
+            add('groq', 'llama-3.3-70b-versatile')
+            add('nvidia', 'meta/llama-3.1-70b-instruct')
         else:
+            add('longcat', 'LongCat-Flash-Lite')
+            add('gemini', 'gemini-3.1-flash-lite-preview')
+            add('github', 'gpt-4o-mini')
+            add('mistral', 'mistral-large-latest')
+            add('sambanova', 'DeepSeek-V3.1-Terminus')
             add('openrouter', 'openrouter/auto:free')
-            add('opencode', 'auto')
-            add('github', 'openai/gpt-4.1-mini')
-            add('groq', 'openai/gpt-oss-20b')
-            add('mistral', 'mistral-small-latest')
-            add('cerebras', 'qwen-3-coder-480b')
-            add('sambanova', 'DeepSeek-V3-0324')
-            add('longcat', 'deepseek-v3.1')
+            add('groq', 'llama-3.3-70b-versatile')
+            add('nvidia', 'meta/llama-3.1-70b-instruct')
 
         if ordered:
             return ordered
 
-        fallback_order = ['openrouter', 'opencode', 'github', 'groq', 'mistral', 'cerebras', 'sambanova', 'longcat']
+        fallback_order = ['longcat', 'gemini', 'github', 'mistral', 'sambanova', 'openrouter', 'groq', 'nvidia']
         for provider_name in fallback_order:
             if provider_name not in configured:
                 continue
@@ -304,14 +308,22 @@ class ProxyService:
             ttl_seconds=self.health_ttl_seconds,
         )
 
-        safe_prompt = trim_prompt(provider_name, prompt)
         output_tokens = max_output_tokens if max_output_tokens is not None else response_token_budget(provider_name)
         last_error: str | None = None
         last_category: str | None = None
         last_status: int | None = None
+        learned_limits = load_token_limits(self.token_limit_path)
         for candidate in candidates:
+            budget = resolve_token_budget(
+                provider=provider_name,
+                model=candidate,
+                prompt=trim_prompt(provider_name, prompt),
+                requested_output_tokens=output_tokens,
+                learned_limits=learned_limits,
+                model_metadata=None,
+            )
             try:
-                content = client.chat(candidate, safe_prompt, max_tokens=output_tokens)
+                content = client.chat(candidate, budget.trimmed_prompt, max_tokens=budget.output_tokens_limit)
                 upsert_health(provider_name, candidate, True, path=self.health_path)
                 return ProbeResult(provider=provider_name, model=model_id, ok=True, actual_model=candidate, content=content)
             except ProviderError as exc:
@@ -322,6 +334,43 @@ class ProxyService:
                 else:
                     last_category = classify_error(0, last_error).category
                     last_status = None
+                if last_category == 'token_limit':
+                    learned = shrink_budget_after_limit_error(
+                        provider=provider_name,
+                        model=candidate,
+                        prompt=budget.trimmed_prompt,
+                        attempted_output_tokens=budget.output_tokens_limit,
+                        error_message=last_error,
+                    )
+                    upsert_token_limit(
+                        provider_name,
+                        candidate,
+                        input_tokens_limit=learned.input_tokens_limit,
+                        output_tokens_limit=learned.output_tokens_limit,
+                        source=learned.source,
+                        path=self.token_limit_path,
+                    )
+                    retry_limits = load_token_limits(self.token_limit_path)
+                    retry_budget = resolve_token_budget(
+                        provider=provider_name,
+                        model=candidate,
+                        prompt=trim_prompt(provider_name, prompt),
+                        requested_output_tokens=output_tokens,
+                        learned_limits=retry_limits,
+                        model_metadata=None,
+                    )
+                    try:
+                        content = client.chat(candidate, retry_budget.trimmed_prompt, max_tokens=retry_budget.output_tokens_limit)
+                        upsert_health(provider_name, candidate, True, path=self.health_path)
+                        return ProbeResult(provider=provider_name, model=model_id, ok=True, actual_model=candidate, content=content)
+                    except ProviderError as retry_exc:
+                        last_error = str(retry_exc)
+                        if isinstance(retry_exc, ProviderHTTPError):
+                            last_category = retry_exc.category
+                            last_status = retry_exc.status
+                        else:
+                            last_category = classify_error(0, last_error).category
+                            last_status = None
                 upsert_health(provider_name, candidate, False, reason=last_category, path=self.health_path)
 
         final_category = last_category or classify_error(0, last_error or '').category

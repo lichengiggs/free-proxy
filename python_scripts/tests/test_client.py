@@ -19,6 +19,15 @@ class FakeTransport:
         return self.responses[(method, url)]
 
 
+class TimeoutTransport:
+    def __init__(self) -> None:
+        self.timeouts: list[int] = []
+
+    def request(self, method: str, url: str, headers: dict[str, str] | None = None, body: bytes | None = None, timeout: int = 30):
+        self.timeouts.append(timeout)
+        raise TimeoutError('The read operation timed out')
+
+
 class ClientTests(unittest.TestCase):
     def test_build_url_handles_slashes_and_query(self) -> None:
         self.assertEqual(
@@ -60,6 +69,15 @@ class ClientTests(unittest.TestCase):
         where_mock.assert_called_once_with()
         context_mock.assert_called_once_with(cafile='/tmp/test-cert.pem')
         self.assertEqual(urlopen_mock.call_args.kwargs['context'], 'ssl-context')
+
+    def test_urllib_transport_converts_timeout_to_provider_error(self) -> None:
+        with patch('python_scripts.client.certifi.where', return_value='/tmp/test-cert.pem'), \
+             patch('python_scripts.client.ssl.create_default_context', return_value='ssl-context'), \
+             patch('python_scripts.client.urlopen', side_effect=TimeoutError('The read operation timed out')):
+            transport = UrlLibTransport()
+            with self.assertRaises(Exception) as ctx:
+                transport.request('GET', 'https://example.com/models')
+        self.assertIn('网络连接失败', str(ctx.exception))
 
     def test_openai_list_models_and_chat(self) -> None:
         spec = get_provider_spec('openrouter')
@@ -119,19 +137,8 @@ class ClientTests(unittest.TestCase):
             ('POST', 'https://models.github.ai/inference/chat/completions?api-version=2024-12-01-preview'): (200, {}, json.dumps({'choices': [{'message': {'content': 'ok'}}]}).encode()),
         })
         client = ProviderClient(spec=spec, api_key='x', transport=transport)
-        self.assertEqual(client.list_models(), ['gpt-4o-mini', 'gpt-4o', 'DeepSeek-V3-0324', 'Llama-3.3-70B-Instruct'])
+        self.assertEqual(client.list_models(), ['gpt-4o', 'gpt-4o-mini', 'gpt-4.1-mini', 'DeepSeek-V3-0324'])
         self.assertEqual(client.chat('gpt-4o-mini', 'ok'), 'ok')
-
-    def test_cerebras_model_hint_fallback(self) -> None:
-        spec = get_provider_spec('cerebras')
-        transport = FakeTransport({
-            ('GET', 'https://api.cerebras.ai/v1/models'): (403, {}, b'error code: 1010'),
-            ('POST', 'https://api.cerebras.ai/v1/chat/completions'): (403, {}, b'error code: 1010'),
-        })
-        client = ProviderClient(spec=spec, api_key='x', transport=transport)
-        self.assertEqual(client.list_models(), ['gpt-oss-120b', 'llama-3.1-8b'])
-        with self.assertRaises(Exception):
-            client.chat('llama-3.3-70b', 'ok')
 
     def test_groq_model_hint_fallback_on_list_error(self) -> None:
         spec = get_provider_spec('groq')
@@ -152,7 +159,7 @@ class ClientTests(unittest.TestCase):
         client = ProviderClient(spec=spec, api_key='x', transport=transport)
         self.assertEqual(
             client.list_models(),
-            ['LongCat-Flash-Chat', 'LongCat-Flash-Thinking', 'LongCat-Flash-Thinking-2601', 'LongCat-Flash-Lite'],
+            ['LongCat-Flash-Lite', 'LongCat-Flash-Chat', 'LongCat-Flash-Thinking', 'LongCat-Flash-Thinking-2601'],
         )
         self.assertEqual(client.chat('LongCat-Flash-Chat', 'ok'), 'ok')
 
@@ -165,3 +172,42 @@ class ClientTests(unittest.TestCase):
         client = ProviderClient(spec=spec, api_key='x', transport=transport)
         self.assertEqual(client.list_models(), ['gemini-2.0-flash'])
         self.assertEqual(client.chat('models/gemini-2.0-flash', 'ok'), 'ok')
+
+    def test_gemini_excludes_image_vision_and_embedding_models(self) -> None:
+        spec = get_provider_spec('gemini')
+        transport = FakeTransport({
+            ('GET', 'https://generativelanguage.googleapis.com/v1beta/models'): (
+                200,
+                {},
+                json.dumps(
+                    {
+                        'models': [
+                            {'id': 'models/gemini-3.1-flash-lite-preview', 'supportedGenerationMethods': ['generateContent']},
+                            {'id': 'models/gemini-2.0-flash-vision', 'supportedGenerationMethods': ['generateContent']},
+                            {'id': 'models/imagen-3.0-generate-002', 'supportedGenerationMethods': ['predict']},
+                            {'id': 'models/text-embedding-004', 'supportedGenerationMethods': ['embedContent']},
+                        ]
+                    }
+                ).encode(),
+            ),
+        })
+        client = ProviderClient(spec=spec, api_key='x', transport=transport)
+        self.assertEqual(client.list_models(), ['gemini-3.1-flash-lite-preview'])
+
+    def test_longcat_thinking_uses_longer_timeout(self) -> None:
+        spec = get_provider_spec('longcat')
+        transport = TimeoutTransport()
+        client = ProviderClient(spec=spec, api_key='x', transport=transport, request_timeout_seconds=12)
+        with self.assertRaises(Exception):
+            client.chat('LongCat-Flash-Thinking-2601', 'ok')
+        self.assertEqual(transport.timeouts[-1], 30)
+
+    def test_nvidia_model_hint_fallback_on_list_error(self) -> None:
+        spec = get_provider_spec('nvidia')
+        transport = FakeTransport({
+            ('GET', 'https://integrate.api.nvidia.com/v1/models'): (404, {}, json.dumps({'error': {'message': 'not found'}}).encode()),
+            ('POST', 'https://integrate.api.nvidia.com/v1/chat/completions'): (200, {}, json.dumps({'choices': [{'message': {'content': 'ok'}}]}).encode()),
+        })
+        client = ProviderClient(spec=spec, api_key='x', transport=transport)
+        self.assertEqual(client.list_models(), ['meta/llama-3.1-70b-instruct'])
+        self.assertEqual(client.chat('meta/llama-3.1-70b-instruct', 'ok'), 'ok')

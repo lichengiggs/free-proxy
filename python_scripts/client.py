@@ -36,6 +36,8 @@ class UrlLibTransport:
                 return response.status, dict(response.headers.items()), response.read()
         except HTTPError as exc:
             return exc.code, dict(exc.headers.items()) if exc.headers else {}, exc.read()
+        except TimeoutError as exc:
+            raise ProviderError(f'网络连接失败: {exc}') from exc
         except URLError as exc:  # pragma: no cover - network layer
             raise ProviderError(f'网络连接失败: {exc.reason}') from exc
 
@@ -68,14 +70,14 @@ class ProviderClient:
             'Authorization': f'Bearer {self.api_key}',
         }
 
-    def _request_json(self, method: str, path: str, payload: dict[str, Any] | None = None, query: dict[str, str] | None = None) -> tuple[int, dict[str, str], Any]:
+    def _request_json(self, method: str, path: str, payload: dict[str, Any] | None = None, query: dict[str, str] | None = None, timeout: int | None = None) -> tuple[int, dict[str, str], Any]:
         body = json.dumps(payload).encode('utf-8') if payload is not None else None
         status, headers, raw = self.transport.request(
             method,
             build_url(self.spec.base_url, path, query),
             self._headers(),
             body,
-            timeout=self.request_timeout_seconds,
+            timeout=timeout if timeout is not None else self._request_timeout_seconds_for_path(path),
         )
         text = raw.decode('utf-8') if raw else ''
         data: Any = None
@@ -89,11 +91,11 @@ class ProviderClient:
     def list_models(self) -> list[str]:
         status, _, data = self._request_json('GET', '/models')
         if status >= 400:
-            if self.spec.name in {'github', 'cerebras', 'groq', 'longcat'}:
+            if self.spec.name in {'github', 'groq', 'longcat', 'nvidia'}:
                 return get_provider_model_hints(self.spec.name)
             self._raise_http_error(status, data, '获取模型失败')
 
-        if self.spec.name in {'github', 'cerebras', 'groq', 'longcat'} and (not data or not isinstance(data, (dict, list))):
+        if self.spec.name in {'github', 'groq', 'longcat', 'nvidia'} and (not data or not isinstance(data, (dict, list))):
             return get_provider_model_hints(self.spec.name)
 
         models: list[dict[str, Any]] = []
@@ -112,6 +114,8 @@ class ProviderClient:
             if not isinstance(model_id, str) or not model_id.strip():
                 continue
             if self.spec.name == 'openrouter' and not self._is_openrouter_free_model(item, model_id):
+                continue
+            if self.spec.name == 'gemini' and not self._is_supported_gemini_text_model(item, model_id):
                 continue
             ids.append(self.normalize_model_id(model_id))
         return ids
@@ -134,6 +138,15 @@ class ProviderClient:
             return False
         return prompt_cost == 0 and completion_cost == 0
 
+    @staticmethod
+    def _is_supported_gemini_text_model(item: dict[str, Any], model_id: str) -> bool:
+        methods = item.get('supportedGenerationMethods')
+        if isinstance(methods, list) and methods and 'generateContent' not in methods:
+            return False
+        lowered = model_id.lower()
+        excluded_tokens = ('image', 'imagen', 'vision', 'embedding', 'aqa')
+        return not any(token in lowered for token in excluded_tokens)
+
     def chat(self, model_id: str, prompt: str = 'ok', max_tokens: int = 256) -> str:
         if self.spec.format == 'gemini':
             return self._chat_gemini(model_id, prompt, max_tokens=max_tokens)
@@ -148,12 +161,14 @@ class ProviderClient:
             raise ProviderError('provider is not openai-compatible')
         query = get_provider_required_query(self.spec.name)
         body = json.dumps(payload, ensure_ascii=False).encode('utf-8')
+        model_id = payload.get('model')
+        timeout = self._request_timeout_seconds_for_model(str(model_id)) if isinstance(model_id, str) else self.request_timeout_seconds
         return self.transport.request(
             'POST',
             build_url(self.spec.base_url, '/chat/completions', query),
             self._headers(),
             body,
-            timeout=self.request_timeout_seconds,
+            timeout=timeout,
         )
 
     def _chat_openai(self, model_id: str, prompt: str, *, max_tokens: int) -> str:
@@ -164,7 +179,7 @@ class ProviderClient:
             'max_tokens': max_tokens,
         }
         query = get_provider_required_query(self.spec.name)
-        status, _, data = self._request_json('POST', '/chat/completions', payload, query=query)
+        status, _, data = self._request_json('POST', '/chat/completions', payload, query=query, timeout=self._request_timeout_seconds_for_model(model_id))
         if status >= 400:
             self._raise_http_error(status, data, '连通失败')
         try:
@@ -223,6 +238,20 @@ class ProviderClient:
         if self.spec.format == 'gemini' and model_id.startswith('models/'):
             return model_id.removeprefix('models/')
         return model_id
+
+    def _request_timeout_seconds_for_path(self, path: str) -> int:
+        if self.spec.format == 'gemini':
+            marker = '/models/'
+            if marker in path and ':generateContent' in path:
+                model_id = path.split(marker, 1)[1].split(':generateContent', 1)[0]
+                return self._request_timeout_seconds_for_model(model_id)
+        return self.request_timeout_seconds
+
+    def _request_timeout_seconds_for_model(self, model_id: str) -> int:
+        lowered = model_id.lower()
+        if self.spec.name == 'longcat' and 'thinking' in lowered:
+            return max(self.request_timeout_seconds, 30)
+        return self.request_timeout_seconds
 
     @staticmethod
     def _error_message(data: Any, fallback: str) -> str:

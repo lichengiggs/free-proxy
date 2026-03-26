@@ -23,12 +23,15 @@ class ConfigTests(unittest.TestCase):
 
     def test_provider_specs_are_backed_by_catalog(self) -> None:
         specs = get_provider_specs()
-        self.assertGreaterEqual(len(specs), 9)
+        self.assertGreaterEqual(len(specs), 8)
 
         names = {spec.name for spec in specs}
         self.assertIn('openrouter', names)
         self.assertIn('gemini', names)
         self.assertIn('longcat', names)
+        self.assertIn('nvidia', names)
+        self.assertNotIn('opencode', names)
+        self.assertNotIn('cerebras', names)
 
         github = get_provider_spec('github')
         self.assertEqual(github.base_url, 'https://models.github.ai/inference')
@@ -37,3 +40,7 @@ class ConfigTests(unittest.TestCase):
         longcat = get_provider_spec('longcat')
         self.assertEqual(longcat.base_url, 'https://api.longcat.chat/openai')
         self.assertEqual(longcat.api_key_env, 'LONGCAT_API_KEY')
+
+        nvidia = get_provider_spec('nvidia')
+        self.assertEqual(nvidia.base_url, 'https://integrate.api.nvidia.com/v1')
+        self.assertEqual(nvidia.api_key_env, 'NVIDIA_API_KEY')

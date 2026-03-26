@@ -12,6 +12,8 @@ class ProviderFailure:
 
 def classify_error(status: int, body_text: str) -> ProviderFailure:
     text = (body_text or '').lower()
+    if any(token in text for token in ('maximum context length', 'context length exceeded', 'too many tokens', 'max tokens', 'maxoutputtokens', 'prompt is too long', 'payload too large')):
+        return ProviderFailure('token_limit', '超过上下文或输出 token 限制', True)
     if any(token in text for token in ('invalid api key', 'unauthorized', 'forbidden', 'permission denied')):
         return ProviderFailure('auth', 'API Key 无效或权限不足', False)
     if any(token in text for token in ('model not found', 'unknown model', 'unsupported model', 'does not exist')):
@@ -47,6 +49,8 @@ def remediation_suggestion(category: str, provider: str) -> str:
         return f'{provider} 模型 ID 可能填写错误，请优先使用推荐模型列表中的模型。'
     if category == 'network':
         return f'{provider} 连接不稳定，请检查网络、代理和本机防火墙配置。'
+    if category == 'token_limit':
+        return f'{provider} 请求超过 token 限制，建议缩短上下文、降低输出预算，或等待系统学习到更合适的限制。'
     if category == 'server':
         return f'{provider} 上游服务异常，建议稍后重试并切换备用模型。'
     return f'{provider} 返回未知错误，建议先执行 verify 再使用推荐模型进行探测。'

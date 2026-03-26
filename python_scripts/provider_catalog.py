@@ -4,7 +4,7 @@ from dataclasses import dataclass, field
 from typing import Literal
 
 
-FormatType = Literal['openai', 'gemini']
+FormatType = Literal['openai', 'gemini', 'anthropic']
 
 
 @dataclass(frozen=True)
@@ -32,37 +32,42 @@ PROVIDERS: tuple[ProviderMeta, ...] = (
         'openai',
         model_hints=('llama-3.1-8b-instant', 'llama-3.3-70b-versatile'),
     ),
-    ProviderMeta('opencode', 'https://opencode.ai/zen/v1', 'OPENCODE_API_KEY', 'openai', model_hints=('auto',)),
     ProviderMeta(
         'longcat',
         'https://api.longcat.chat/openai',
         'LONGCAT_API_KEY',
         'openai',
-        model_hints=('LongCat-Flash-Chat', 'LongCat-Flash-Thinking', 'LongCat-Flash-Thinking-2601', 'LongCat-Flash-Lite'),
+        model_hints=('LongCat-Flash-Lite', 'LongCat-Flash-Chat', 'LongCat-Flash-Thinking', 'LongCat-Flash-Thinking-2601'),
     ),
-    ProviderMeta('gemini', 'https://generativelanguage.googleapis.com/v1beta', 'GEMINI_API_KEY', 'gemini', model_hints=('gemini-2.0-flash',)),
+    ProviderMeta(
+        'gemini',
+        'https://generativelanguage.googleapis.com/v1beta',
+        'GEMINI_API_KEY',
+        'gemini',
+        model_hints=('gemini-3.1-flash-lite-preview', 'gemini-2.0-flash'),
+    ),
     ProviderMeta(
         'github',
         'https://models.github.ai/inference',
         'GITHUB_MODELS_API_KEY',
         'openai',
-        model_hints=('gpt-4o-mini', 'gpt-4o', 'DeepSeek-V3-0324', 'Llama-3.3-70B-Instruct'),
+        model_hints=('gpt-4o', 'gpt-4o-mini', 'gpt-4.1-mini', 'DeepSeek-V3-0324'),
         required_query=(('api-version', '2024-12-01-preview'),),
     ),
-    ProviderMeta('mistral', 'https://api.mistral.ai/v1', 'MISTRAL_API_KEY', 'openai', model_hints=('mistral-small-latest',)),
-    ProviderMeta(
-        'cerebras',
-        'https://api.cerebras.ai/v1',
-        'CEREBRAS_API_KEY',
-        'openai',
-        model_hints=('gpt-oss-120b', 'llama-3.1-8b'),
-    ),
+    ProviderMeta('mistral', 'https://api.mistral.ai/v1', 'MISTRAL_API_KEY', 'openai', model_hints=('mistral-large-latest', 'mistral-medium-latest', 'mistral-small-latest')),
     ProviderMeta(
         'sambanova',
         'https://api.sambanova.ai/v1',
         'SAMBANOVA_API_KEY',
         'openai',
-        model_hints=('Meta-Llama-3.1-8B-Instruct', 'DeepSeek-V3-0324'),
+        model_hints=('DeepSeek-V3.1-Terminus', 'Qwen3-235B', 'Meta-Llama-3.1-8B-Instruct'),
+    ),
+    ProviderMeta(
+        'nvidia',
+        'https://integrate.api.nvidia.com/v1',
+        'NVIDIA_API_KEY',
+        'openai',
+        model_hints=('meta/llama-3.1-70b-instruct',),
     ),
 )
 

@@ -70,6 +70,24 @@ class SslVerifyFailTransport:
         raise ProviderError('网络连接失败: [SSL: CERTIFICATE_VERIFY_FAILED] certificate verify failed: unable to get local issuer certificate (_ssl.c:1002)')
 
 
+class TokenLimitRetryTransport:
+    def __init__(self) -> None:
+        self.calls = 0
+        self.max_tokens: list[int] = []
+        self.prompts: list[str] = []
+
+    def request(self, method: str, url: str, headers=None, body=None, timeout: int = 30):
+        if url.endswith('/models'):
+            return 200, {}, json.dumps({'data': [{'id': 'model-a'}]}).encode()
+        payload = json.loads((body or b'{}').decode('utf-8'))
+        self.max_tokens.append(int(payload.get('max_tokens', 0) or 0))
+        self.prompts.append(payload.get('messages', [{}])[0].get('content', ''))
+        self.calls += 1
+        if self.calls == 1:
+            return 400, {}, json.dumps({'error': {'message': 'maximum context length is 8192 tokens'}}).encode()
+        return 200, {}, json.dumps({'choices': [{'message': {'content': 'ok'}}]}).encode()
+
+
 class ServiceTests(unittest.TestCase):
     def setUp(self) -> None:
         self._old = os.environ.get('OPENROUTER_API_KEY')
@@ -204,24 +222,46 @@ class ServiceTests(unittest.TestCase):
         self.assertIn('free-proxy/auto', ids)
         self.assertIn('free-proxy/coding', ids)
 
-    def test_resolve_alias_candidates_prefers_opencode_for_coding(self) -> None:
-        old_openrouter = os.environ.get('OPENROUTER_API_KEY')
-        old_opencode = os.environ.get('OPENCODE_API_KEY')
-        os.environ['OPENROUTER_API_KEY'] = 'test-openrouter'
-        os.environ['OPENCODE_API_KEY'] = 'test-opencode'
+    def test_resolve_alias_candidates_prefers_longcat_then_gemini_for_coding(self) -> None:
+        old_longcat = os.environ.get('LONGCAT_API_KEY')
+        old_gemini = os.environ.get('GEMINI_API_KEY')
+        old_sambanova = os.environ.get('SAMBANOVA_API_KEY')
+        os.environ['LONGCAT_API_KEY'] = 'test-longcat'
+        os.environ['GEMINI_API_KEY'] = 'test-gemini'
+        os.environ['SAMBANOVA_API_KEY'] = 'test-sambanova'
         try:
             service = ProxyService(transport=FakeTransport())
             candidates = service.resolve_alias_candidates('coding')
             self.assertGreaterEqual(len(candidates), 2)
-            self.assertEqual(candidates[0][0], 'opencode')
-            self.assertEqual(candidates[0][1], 'auto')
-            self.assertIn(('openrouter', 'openrouter/auto:free'), candidates)
+            self.assertEqual(candidates[0], ('longcat', 'LongCat-Flash-Lite'))
+            self.assertEqual(candidates[1], ('gemini', 'gemini-3.1-flash-lite-preview'))
+            self.assertIn(('sambanova', 'DeepSeek-V3.1-Terminus'), candidates)
         finally:
-            if old_openrouter is None:
-                os.environ.pop('OPENROUTER_API_KEY', None)
+            if old_longcat is None:
+                os.environ.pop('LONGCAT_API_KEY', None)
             else:
-                os.environ['OPENROUTER_API_KEY'] = old_openrouter
-            if old_opencode is None:
-                os.environ.pop('OPENCODE_API_KEY', None)
+                os.environ['LONGCAT_API_KEY'] = old_longcat
+            if old_gemini is None:
+                os.environ.pop('GEMINI_API_KEY', None)
             else:
-                os.environ['OPENCODE_API_KEY'] = old_opencode
+                os.environ['GEMINI_API_KEY'] = old_gemini
+            if old_sambanova is None:
+                os.environ.pop('SAMBANOVA_API_KEY', None)
+            else:
+                os.environ['SAMBANOVA_API_KEY'] = old_sambanova
+
+    def test_chat_retries_once_after_token_limit_and_persists_learned_limit(self) -> None:
+        transport = TokenLimitRetryTransport()
+        with tempfile.TemporaryDirectory() as tmp:
+            service = ProxyService(
+                transport=transport,
+                health_path=Path(tmp) / 'health.json',
+                token_limit_path=Path(tmp) / 'token-limits.json',
+            )
+            result = service.chat('openrouter', 'model-a', prompt='x' * 60000, max_output_tokens=4096)
+
+            self.assertTrue(result.ok)
+            self.assertEqual(transport.calls, 2)
+            self.assertLess(transport.max_tokens[-1], transport.max_tokens[0])
+            token_limits = json.loads((Path(tmp) / 'token-limits.json').read_text(encoding='utf-8'))
+            self.assertEqual(token_limits['openrouter/model-a']['input_tokens_limit'], 8192)
