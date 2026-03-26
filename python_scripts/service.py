@@ -11,7 +11,7 @@ from .config import DOTENV_PATH, ProviderSpec, configured_provider_names, get_pr
 from .env_store import upsert_env
 from .errors import classify_error, remediation_suggestion
 from .health_store import load_health, upsert_health
-from .token_policy import trim_prompt
+from .token_policy import PROBE_OUTPUT_TOKENS, response_token_budget, trim_prompt
 
 
 @dataclass
@@ -282,9 +282,9 @@ class ProxyService:
         return self.provider_client(provider_name).list_models()
 
     def probe(self, provider_name: str, model_id: str) -> ProbeResult:
-        return self.chat(provider_name, model_id, prompt='ok')
+        return self.chat(provider_name, model_id, prompt='ok', max_output_tokens=PROBE_OUTPUT_TOKENS)
 
-    def chat(self, provider_name: str, model_id: str, prompt: str) -> ProbeResult:
+    def chat(self, provider_name: str, model_id: str, prompt: str, max_output_tokens: int | None = None) -> ProbeResult:
         client = self.provider_client(provider_name)
         health = load_health(self.health_path)
 
@@ -305,12 +305,13 @@ class ProxyService:
         )
 
         safe_prompt = trim_prompt(provider_name, prompt)
+        output_tokens = max_output_tokens if max_output_tokens is not None else response_token_budget(provider_name)
         last_error: str | None = None
         last_category: str | None = None
         last_status: int | None = None
         for candidate in candidates:
             try:
-                content = client.chat(candidate, safe_prompt)
+                content = client.chat(candidate, safe_prompt, max_tokens=output_tokens)
                 upsert_health(provider_name, candidate, True, path=self.health_path)
                 return ProbeResult(provider=provider_name, model=model_id, ok=True, actual_model=candidate, content=content)
             except ProviderError as exc:

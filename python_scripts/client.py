@@ -130,10 +130,10 @@ class ProviderClient:
             return False
         return prompt_cost == 0 and completion_cost == 0
 
-    def chat(self, model_id: str, prompt: str = 'ok') -> str:
+    def chat(self, model_id: str, prompt: str = 'ok', max_tokens: int = 256) -> str:
         if self.spec.format == 'gemini':
-            return self._chat_gemini(model_id, prompt)
-        return self._chat_openai(model_id, prompt)
+            return self._chat_gemini(model_id, prompt, max_tokens=max_tokens)
+        return self._chat_openai(model_id, prompt, max_tokens=max_tokens)
 
     def probe(self, model_id: str) -> dict[str, Any]:
         content = self.chat(model_id, 'ok')
@@ -152,12 +152,12 @@ class ProviderClient:
             timeout=self.request_timeout_seconds,
         )
 
-    def _chat_openai(self, model_id: str, prompt: str) -> str:
+    def _chat_openai(self, model_id: str, prompt: str, *, max_tokens: int) -> str:
         payload = {
             'model': model_id,
             'messages': [{'role': 'user', 'content': prompt}],
             'temperature': 0,
-            'max_tokens': 8,
+            'max_tokens': max_tokens,
         }
         query = get_provider_required_query(self.spec.name)
         status, _, data = self._request_json('POST', '/chat/completions', payload, query=query)
@@ -193,13 +193,13 @@ class ProviderClient:
         except Exception as exc:  # pragma: no cover - defensive
             raise ProviderError('返回内容为空或格式不正确') from exc
 
-    def _chat_gemini(self, model_id: str, prompt: str) -> str:
+    def _chat_gemini(self, model_id: str, prompt: str, *, max_tokens: int) -> str:
         payload = {
             'contents': [{
                 'role': 'user',
                 'parts': [{'text': prompt}],
             }],
-            'generationConfig': {'temperature': 0, 'maxOutputTokens': 32},
+            'generationConfig': {'temperature': 0, 'maxOutputTokens': max_tokens},
         }
         path = f'/models/{self.normalize_model_id(model_id)}:generateContent'
         status, _, data = self._request_json('POST', path, payload)

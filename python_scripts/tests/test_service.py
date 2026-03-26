@@ -26,6 +26,7 @@ class FallbackTransport:
     def __init__(self) -> None:
         self.chat_models: list[str] = []
         self.last_prompt: str = ''
+        self.max_tokens: list[int] = []
 
     def request(self, method: str, url: str, headers=None, body=None, timeout: int = 30):
         if url.endswith('/models'):
@@ -35,6 +36,7 @@ class FallbackTransport:
         model = payload.get('model', '')
         self.chat_models.append(model)
         self.last_prompt = payload.get('messages', [{}])[0].get('content', '')
+        self.max_tokens.append(int(payload.get('max_tokens', 0) or 0))
 
         if model == 'model-a':
             return 429, {}, json.dumps({'error': {'message': 'rate limit'}}).encode()
@@ -116,6 +118,16 @@ class ServiceTests(unittest.TestCase):
             self.assertEqual(transport.chat_models[0], 'model-a')
             self.assertGreaterEqual(len(transport.chat_models), 2)
             self.assertIn('...[内容已截断]...', transport.last_prompt)
+            self.assertEqual(transport.max_tokens[0], 512)
+
+    def test_probe_keeps_small_output_budget(self) -> None:
+        transport = FallbackTransport()
+        with tempfile.TemporaryDirectory() as tmp:
+            service = ProxyService(transport=transport, health_path=Path(tmp) / 'health.json')
+            result = service.probe('openrouter', 'model-a')
+
+            self.assertTrue(result.ok)
+            self.assertEqual(transport.max_tokens[0], 32)
 
     def test_provider_key_status_and_save(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

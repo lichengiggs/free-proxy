@@ -62,15 +62,35 @@ uv run free-proxy serve   # 启动后端服务
 - OpenAI 兼容客户端 / Python SDK
   - Base URL：`http://127.0.0.1:8765/v1`
   - Model：`free-proxy/coding`（代码场景）或 `free-proxy/auto`（通用场景）
+  - 最小示例：
+
+```python
+from openai import OpenAI
+
+client = OpenAI(
+    api_key="not-needed",
+    base_url="http://127.0.0.1:8765/v1",
+)
+
+resp = client.chat.completions.create(
+    model="free-proxy/coding",
+    messages=[{"role": "user", "content": "Reply with exactly OK"}],
+)
+
+print(resp.choices[0].message.content)
+```
 
 - OpenClaw
   - Provider：`free-proxy`
+  - Base URL：`http://localhost:8765/v1`
+  - 模型：`auto`、`coding`
   - 推荐模型：`free-proxy/coding`
   - 保守入口：`free-proxy/auto`
 
 - Opencode
   - Provider：`free-proxy`
   - 如果要写配置文件，路径通常是：`~/.config/opencode/opencode.json`
+  - Base URL：`http://localhost:8765/v1`
   - 推荐命令：`opencode run -m free-proxy/coding "Reply with exactly OK"`
   - 保守命令：`opencode run -m free-proxy/auto "Reply with exactly OK"`
 

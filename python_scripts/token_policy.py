@@ -15,6 +15,8 @@ DEFAULT_POLICY = {
     'openrouter': TokenPolicy(max_input_chars=16000, reserve_output_tokens=512),
 }
 
+PROBE_OUTPUT_TOKENS = 32
+
 
 def trim_prompt(provider: str, text: str) -> str:
     policy = DEFAULT_POLICY.get(provider, TokenPolicy(max_input_chars=8000, reserve_output_tokens=256))
@@ -24,3 +26,8 @@ def trim_prompt(provider: str, text: str) -> str:
     head = int(policy.max_input_chars * 0.7)
     tail = policy.max_input_chars - head
     return text[:head] + '\n\n...[内容已截断]...\n\n' + text[-tail:]
+
+
+def response_token_budget(provider: str) -> int:
+    policy = DEFAULT_POLICY.get(provider, TokenPolicy(max_input_chars=8000, reserve_output_tokens=256))
+    return policy.reserve_output_tokens

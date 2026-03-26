@@ -46,6 +46,18 @@ class ClientTests(unittest.TestCase):
         self.assertEqual(client.list_models(), ['a', 'b'])
         self.assertEqual(client.chat('a', 'ok'), 'ok')
 
+    def test_openai_chat_uses_requested_max_tokens(self) -> None:
+        spec = get_provider_spec('openrouter')
+        transport = FakeTransport({
+            ('POST', 'https://openrouter.ai/api/v1/chat/completions'): (200, {}, json.dumps({'choices': [{'message': {'content': 'ok'}}]}).encode()),
+        })
+        client = ProviderClient(spec=spec, api_key='x', transport=transport)
+        self.assertEqual(client.chat('a', 'hello', max_tokens=256), 'ok')
+
+        _, _, _, body = transport.requests[-1]
+        payload = json.loads((body or b'{}').decode('utf-8'))
+        self.assertEqual(payload['max_tokens'], 256)
+
     def test_openai_chat_raises_when_content_is_null(self) -> None:
         spec = get_provider_spec('openrouter')
         transport = FakeTransport({

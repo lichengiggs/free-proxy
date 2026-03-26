@@ -161,6 +161,20 @@ class ServerApiTests(unittest.TestCase):
         conn.close()
         return status, resp_headers, data
 
+    def test_index_page_uses_new_validation_flow_and_updated_examples(self) -> None:
+        status, headers, body = self._request_raw('GET', '/')
+        self.assertEqual(status, 200)
+        self.assertIn('text/html', headers.get('content-type', ''))
+        self.assertIn('free-proxy 控制台', body)
+        self.assertIn('3. 模型验证', body)
+        self.assertIn('探测模型', body)
+        self.assertIn('http://127.0.0.1:8765/v1', body)
+        self.assertNotIn('按 TypeScript 版的交互方式重做', body)
+        self.assertNotIn('查看模型', body)
+        self.assertNotIn('聊天测试台', body)
+        self.assertNotIn('诊断面板', body)
+        self.assertNotIn('等待聊天结果', body)
+
     def test_health_route(self) -> None:
         status, body = self._request('GET', '/health')
         self.assertEqual(status, 200)
