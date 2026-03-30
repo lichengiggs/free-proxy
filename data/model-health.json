@@ -12,22 +12,22 @@
   "openrouter/ok-model": {
     "ok": false,
     "reason": "rate_limit",
-    "checked_at": 1774420217
+    "checked_at": 1774516349
   },
   "openrouter/v-model": {
     "ok": false,
     "reason": "rate_limit",
-    "checked_at": 1774420217
+    "checked_at": 1774516349
   },
   "openrouter/model-can-list": {
     "ok": false,
     "reason": "rate_limit",
-    "checked_at": 1774420217
+    "checked_at": 1774516349
   },
   "openrouter/openrouter/auto:free": {
     "ok": false,
-    "reason": "quota",
-    "checked_at": 1774420379
+    "reason": "auth",
+    "checked_at": 1774516349
   },
   "openrouter/xiaomi/mimo-v2-omni": {
     "ok": false,
@@ -133,5 +133,25 @@
     "ok": true,
     "reason": null,
     "checked_at": 1774422327
+  },
+  "longcat/LongCat-Flash-Lite": {
+    "ok": true,
+    "reason": null,
+    "checked_at": 1774595718
+  },
+  "longcat/LongCat-Flash-Chat": {
+    "ok": true,
+    "reason": null,
+    "checked_at": 1774700441
+  },
+  "longcat/LongCat-Flash-Thinking": {
+    "ok": false,
+    "reason": "network",
+    "checked_at": 1774516349
+  },
+  "longcat/LongCat-Flash-Thinking-2601": {
+    "ok": false,
+    "reason": "network",
+    "checked_at": 1774595677
   }
 }
