@@ -88,11 +88,20 @@ class UrlLibTransport:
 
         def iterator() -> Iterable[bytes]:
             try:
+                # SSE must be forwarded as soon as each line arrives, otherwise long-thinking
+                # models appear to stall until the upstream socket finally closes.
+                pending = bytearray()
                 while True:
-                    chunk = response.read(4096)
-                    if not chunk:
+                    line = response.readline()
+                    if not line:
+                        if pending:
+                            yield bytes(pending)
                         break
-                    yield chunk
+                    pending.extend(line)
+                    if line in {b'\n', b'\r\n'}:
+                        if len(pending) > len(line):
+                            yield bytes(pending)
+                        pending.clear()
             finally:
                 response.close()
 

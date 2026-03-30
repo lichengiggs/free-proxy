@@ -16,6 +16,7 @@ class ProviderMeta:
     format: FormatType
     model_hints: tuple[str, ...] = field(default_factory=tuple)
     required_query: tuple[tuple[str, str], ...] = field(default_factory=tuple)
+    model_capabilities: dict[str, dict[str, object]] = field(default_factory=dict)
 
 
 PROVIDERS: tuple[ProviderMeta, ...] = (
@@ -39,6 +40,12 @@ PROVIDERS: tuple[ProviderMeta, ...] = (
         'LONGCAT_API_KEY',
         'openai',
         model_hints=('LongCat-Flash-Lite', 'LongCat-Flash-Chat', 'LongCat-Flash-Thinking', 'LongCat-Flash-Thinking-2601'),
+        model_capabilities={
+            'LongCat-Flash-Chat': {'reasoning': False, 'streaming': True, 'long_running': False, 'default_output_tokens': 4096, 'default_timeout_seconds': 12},
+            'LongCat-Flash-Lite': {'reasoning': False, 'streaming': True, 'long_running': False, 'default_output_tokens': 2048, 'default_timeout_seconds': 12},
+            'LongCat-Flash-Thinking': {'reasoning': True, 'streaming': False, 'long_running': True, 'default_output_tokens': 1024, 'default_timeout_seconds': 30},
+            'LongCat-Flash-Thinking-2601': {'reasoning': True, 'streaming': False, 'long_running': True, 'default_output_tokens': 1024, 'default_timeout_seconds': 30},
+        },
     ),
     ProviderMeta(
         'gemini',
@@ -106,3 +113,11 @@ def get_provider_model_hints(name: str) -> list[str]:
 
 def get_provider_required_query(name: str) -> dict[str, str]:
     return dict(get_provider(name).required_query)
+
+
+def get_model_capabilities(name: str, model_id: str) -> dict[str, object]:
+    provider = get_provider(name)
+    model_key = model_id.strip()
+    if model_key and model_key in provider.model_capabilities:
+        return dict(provider.model_capabilities[model_key])
+    return {}

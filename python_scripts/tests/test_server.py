@@ -73,11 +73,10 @@ class FakeService:
 
     def forward_direct_chat(self, provider: str, model: str, payload: dict[str, object]) -> OpenAIForwardResult:
         if payload.get('stream'):
-            body = (
-                'data: {"object":"chat.completion.chunk","choices":[{"delta":{"content":"echo:hello"},"index":0}]}\n\n'
-                'data: [DONE]\n\n'
-            ).encode('utf-8')
-            return OpenAIForwardResult(ok=True, provider=provider, model=model, status=200, headers={'Content-Type': 'text/event-stream; charset=utf-8'}, body=b'', stream_chunks=[body])
+            return OpenAIForwardResult(ok=True, provider=provider, model=model, status=200, headers={'Content-Type': 'text/event-stream; charset=utf-8'}, body=b'', stream_chunks=[
+                b'data: {"object":"chat.completion.chunk","choices":[{"delta":{"content":"echo:hello"},"index":0}]}\n\n',
+                b'data: [DONE]\n\n',
+            ])
         return OpenAIForwardResult(ok=True, provider=provider, model=model, status=200, headers={'Content-Type': 'application/json; charset=utf-8'}, body=json.dumps({'choices': [{'message': {'role': 'assistant', 'content': 'echo:hello'}}]}).encode('utf-8'))
 
     def resolve_openai_target(self, payload: dict[str, object]) -> ResolvedOpenAIRequest:
@@ -316,6 +315,27 @@ class ServerApiTests(unittest.TestCase):
         self.assertIn('text/event-stream', headers.get('content-type', ''))
         self.assertIn('data: [DONE]', body)
         self.assertIn('chat.completion.chunk', body)
+
+    def test_openai_chat_completion_stream_mode_uses_streaming_route_for_openai_payloads(self) -> None:
+        status, headers, body = self._request_raw(
+            'POST',
+            '/v1/chat/completions',
+            {'model': 'openrouter/m1', 'messages': [{'role': 'user', 'content': 'hello'}], 'stream': True},
+        )
+        self.assertEqual(status, 200)
+        self.assertIn('text/event-stream', headers.get('content-type', ''))
+        self.assertIn('data: [DONE]', body)
+        self.assertIn('chat.completion.chunk', body)
+
+    def test_openai_chat_completion_stream_mode_preserves_incremental_chunks(self) -> None:
+        status, headers, body = self._request_raw_prefix(
+            'POST',
+            '/v1/chat/completions',
+            {'model': 'openrouter/m1', 'messages': [{'role': 'user', 'content': 'hello'}], 'stream': True},
+        )
+        self.assertEqual(status, 200)
+        self.assertIn('text/event-stream', headers.get('content-type', ''))
+        self.assertGreaterEqual(body.count('data: '), 2)
 
     def test_openai_chat_completion_stream_mode_returns_sse(self) -> None:
         status, headers, body = self._request_raw(

@@ -9,6 +9,7 @@ from python_scripts.token_budgeting import (
     resolve_token_budget,
     shrink_budget_after_limit_error,
 )
+from python_scripts.token_policy import model_default_output_tokens, model_default_timeout_seconds
 
 
 class TokenBudgetingTests(unittest.TestCase):
@@ -67,3 +68,7 @@ class TokenBudgetingTests(unittest.TestCase):
         )
         self.assertLess(learned.output_tokens_limit, 4096)
         self.assertEqual(learned.source, 'learned_by_backoff')
+
+    def test_model_defaults_align_with_capabilities_for_longcat_thinking(self) -> None:
+        self.assertEqual(model_default_output_tokens('longcat', 'LongCat-Flash-Thinking-2601', 4096), 1024)
+        self.assertEqual(model_default_timeout_seconds('longcat', 'LongCat-Flash-Thinking-2601', 12), 30)

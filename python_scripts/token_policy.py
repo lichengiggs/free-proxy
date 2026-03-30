@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from .provider_catalog import get_model_capabilities
+
 
 @dataclass(frozen=True)
 class TokenPolicy:
@@ -39,6 +41,23 @@ def response_token_budget(provider: str) -> int:
 
 
 def probe_output_tokens(provider: str, model: str) -> int:
-    if provider == 'longcat' and 'thinking' in model.lower():
+    capabilities = get_model_capabilities(provider, model)
+    if capabilities.get('reasoning') is True:
         return LONGCAT_THINKING_PROBE_OUTPUT_TOKENS
     return PROBE_OUTPUT_TOKENS
+
+
+def model_default_timeout_seconds(provider: str, model: str, fallback: int) -> int:
+    capabilities = get_model_capabilities(provider, model)
+    timeout_value = capabilities.get('default_timeout_seconds')
+    if isinstance(timeout_value, int) and timeout_value > 0:
+        return timeout_value
+    return fallback
+
+
+def model_default_output_tokens(provider: str, model: str, fallback: int) -> int:
+    capabilities = get_model_capabilities(provider, model)
+    output_value = capabilities.get('default_output_tokens')
+    if isinstance(output_value, int) and output_value > 0:
+        return output_value
+    return fallback

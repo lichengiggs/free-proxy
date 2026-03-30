@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from collections.abc import Callable, Iterable
 
 from .errors import classify_error
-from .provider_catalog import ProviderMeta, get_provider_model_hints, get_provider_required_query
+from .provider_catalog import ProviderMeta, get_model_capabilities, get_provider_model_hints, get_provider_required_query
 from .provider_errors import ProviderError, ProviderHTTPError
 from .provider_transport import Transport, UrlLibTransport, build_url
 
@@ -250,9 +250,10 @@ class ProviderAdapter:
         return self.request_timeout_seconds
 
     def _request_timeout_seconds_for_model(self, model_id: str) -> int:
-        lowered = model_id.lower()
-        if self.provider.name == 'longcat' and 'thinking' in lowered:
-            return max(self.request_timeout_seconds, 30)
+        capabilities = get_model_capabilities(self.provider.name, model_id)
+        timeout_value = capabilities.get('default_timeout_seconds')
+        if isinstance(timeout_value, int) and timeout_value > 0:
+            return max(self.request_timeout_seconds, timeout_value)
         return self.request_timeout_seconds
 
     @staticmethod

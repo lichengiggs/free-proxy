@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 import json
+import threading
+import time
 import unittest
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from unittest.mock import patch
 
 from python_scripts.errors import classify_error
@@ -166,6 +169,55 @@ class ClientTests(unittest.TestCase):
         self.assertEqual(transport.requests[0][0], 'POST')
         self.assertIn('/chat/completions', transport.requests[0][1])
 
+    def test_urllib_stream_request_yields_each_sse_event(self) -> None:
+        class Handler(BaseHTTPRequestHandler):
+            def do_POST(self) -> None:  # noqa: N802
+                self.send_response(200)
+                self.send_header('Content-Type', 'text/event-stream; charset=utf-8')
+                self.send_header('Cache-Control', 'no-cache')
+                self.end_headers()
+                self.wfile.write(b'data: {"choices":[{"delta":{"reasoning_content":"think"},"index":0}]}\n')
+                self.wfile.flush()
+                time.sleep(0.1)
+                self.wfile.write(b'\n')
+                self.wfile.flush()
+                time.sleep(0.1)
+                self.wfile.write(b'data: {"choices":[{"delta":{"content":"ok"},"index":0}]}\n')
+                self.wfile.flush()
+                time.sleep(0.1)
+                self.wfile.write(b'\n')
+                self.wfile.flush()
+                self.wfile.write(b'data: [DONE]\n')
+                self.wfile.flush()
+                time.sleep(0.1)
+                self.wfile.write(b'\n')
+                self.wfile.flush()
+
+            def log_message(self, *args: object) -> None:
+                return
+
+        server = ThreadingHTTPServer(('127.0.0.1', 0), Handler)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            transport = UrlLibTransport()
+            status, headers, chunks = transport.stream_request('POST', f'http://127.0.0.1:{server.server_address[1]}/chat/completions', {'Content-Type': 'application/json'}, b'{}', timeout=5)
+
+            self.assertEqual(status, 200)
+            self.assertEqual(headers.get('Content-Type'), 'text/event-stream; charset=utf-8')
+            self.assertEqual(
+                list(chunks),
+                [
+                    b'data: {"choices":[{"delta":{"reasoning_content":"think"},"index":0}]}\n\n',
+                    b'data: {"choices":[{"delta":{"content":"ok"},"index":0}]}\n\n',
+                    b'data: [DONE]\n\n',
+                ],
+            )
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=2)
+
     def test_openai_chat_raises_when_content_is_null(self) -> None:
         provider = get_provider('openrouter')
         transport = FakeTransport({
@@ -278,6 +330,44 @@ class ClientTests(unittest.TestCase):
         with self.assertRaises(ProviderError):
             adapter.chat_text('LongCat-Flash-Thinking-2601', 'ok')
         self.assertEqual(transport.timeouts[-1], 30)
+
+    def test_longcat_thinking_chat_stream_keeps_reasoning_and_content_chunks(self) -> None:
+        provider = get_provider('longcat')
+
+        class StreamTransport(StreamingTransport):
+            def stream_request(
+                self,
+                method: str,
+                url: str,
+                headers: dict[str, str] | None = None,
+                body: bytes | None = None,
+                timeout: int = 30,
+            ) -> tuple[int, dict[str, str], object]:
+                self.requests.append((method, url, headers, body, timeout))
+                return 200, {'content-type': 'text/event-stream; charset=utf-8'}, iter([
+                    b'data: {"choices":[{"delta":{"reasoning_content":"think"},"index":0}]}\n\n',
+                    b'data: {"choices":[{"delta":{"content":"ok"},"index":0}]}\n\n',
+                    b'data: [DONE]\n\n',
+                ])
+
+        transport = StreamTransport()
+        adapter = ProviderAdapter(provider=provider, api_key='x', transport=transport)
+        status, headers, chunks = adapter.chat_completions_stream({
+            'model': 'LongCat-Flash-Thinking-2601',
+            'messages': [{'role': 'user', 'content': 'hello'}],
+            'stream': True,
+        })
+
+        self.assertEqual(status, 200)
+        self.assertEqual(headers.get('content-type'), 'text/event-stream; charset=utf-8')
+        self.assertEqual(
+            list(chunks),
+            [
+                b'data: {"choices":[{"delta":{"reasoning_content":"think"},"index":0}]}\n\n',
+                b'data: {"choices":[{"delta":{"content":"ok"},"index":0}]}\n\n',
+                b'data: [DONE]\n\n',
+            ],
+        )
 
     def test_nvidia_model_hint_fallback_on_list_error(self) -> None:
         provider = get_provider('nvidia')

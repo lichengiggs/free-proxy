@@ -3,7 +3,7 @@ from __future__ import annotations
 import os
 import unittest
 
-from python_scripts.provider_catalog import PROVIDERS, configured_provider_names, get_provider, list_providers
+from python_scripts.provider_catalog import PROVIDERS, configured_provider_names, get_model_capabilities, get_provider, list_providers
 
 
 class ProviderCatalogTests(unittest.TestCase):
@@ -26,3 +26,14 @@ class ProviderCatalogTests(unittest.TestCase):
         names = configured_provider_names()
         self.assertIn('longcat', names)
         self.assertIn('gemini', names)
+
+    def test_get_model_capabilities_returns_model_specific_overrides(self) -> None:
+        provider = get_provider('longcat')
+        self.assertIsInstance(provider.model_capabilities, dict)
+        thinking = get_model_capabilities('longcat', 'LongCat-Flash-Thinking-2601')
+        chat = get_model_capabilities('longcat', 'LongCat-Flash-Chat')
+        self.assertNotEqual(thinking, chat)
+        self.assertTrue(thinking['reasoning'])
+        self.assertFalse(chat['reasoning'])
+        self.assertEqual(thinking['default_output_tokens'], 1024)
+        self.assertEqual(thinking['default_timeout_seconds'], 30)

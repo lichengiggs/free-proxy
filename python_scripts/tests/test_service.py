@@ -180,6 +180,92 @@ class RawTransport:
         return 200, {'Content-Type': 'application/json; charset=utf-8'}, json.dumps({'model': payload.get('model'), 'ok': True}).encode()
 
 
+class ChunkedStreamTransport(RawTransport):
+    def __init__(self) -> None:
+        self.last_payload: dict[str, object] | None = None
+
+    def stream_request(
+        self,
+        method: str,
+        url: str,
+        headers: dict[str, str] | None = None,
+        body: bytes | None = None,
+        timeout: int = 30,
+    ) -> tuple[int, dict[str, str], object]:
+        del method, url, headers, timeout
+        self.last_payload = json.loads((body or b'{}').decode('utf-8'))
+        return 200, {'Content-Type': 'text/event-stream; charset=utf-8'}, iter([
+            b'data: {"choices":[{"delta":{"reasoning_content":"think-1"},"index":0}]}\n\n',
+            b'data: {"choices":[{"delta":{"content":"answer-1"},"index":0}]}\n\n',
+            b'data: [DONE]\n\n',
+        ])
+
+
+class StreamHttpTransport:
+    def __init__(self) -> None:
+        self.requests: list[tuple[str, str, dict[str, str] | None, bytes | None, int]] = []
+
+    def request(
+        self,
+        method: str,
+        url: str,
+        headers: dict[str, str] | None = None,
+        body: bytes | None = None,
+        timeout: int = 30,
+    ) -> tuple[int, dict[str, str], bytes]:
+        self.requests.append((method, url, headers, body, timeout))
+        del timeout
+        return 200, {'Content-Type': 'application/json; charset=utf-8'}, json.dumps({'choices': [{'message': {'content': 'ok'}}]}).encode('utf-8')
+
+    def stream_request(
+        self,
+        method: str,
+        url: str,
+        headers: dict[str, str] | None = None,
+        body: bytes | None = None,
+        timeout: int = 30,
+    ) -> tuple[int, dict[str, str], object]:
+        self.requests.append((method, url, headers, body, timeout))
+        return 200, {'Content-Type': 'text/event-stream; charset=utf-8'}, iter([
+            b'data: {"choices":[{"delta":{"reasoning_content":"think-1"},"index":0}]}\n\n',
+            b'data: {"choices":[{"delta":{"content":"answer-1"},"index":0}]}\n\n',
+            b'data: [DONE]\n\n',
+        ])
+
+
+class LongcatFallbackTransport(StreamHttpTransport):
+    def stream_request(
+        self,
+        method: str,
+        url: str,
+        headers: dict[str, str] | None = None,
+        body: bytes | None = None,
+        timeout: int = 30,
+    ) -> tuple[int, dict[str, str], object]:
+        raise AssertionError('stream_request should not be used for longcat thinking stream fallback')
+
+    def request(
+        self,
+        method: str,
+        url: str,
+        headers: dict[str, str] | None = None,
+        body: bytes | None = None,
+        timeout: int = 30,
+    ) -> tuple[int, dict[str, str], bytes]:
+        self.requests.append((method, url, headers, body, timeout))
+        del timeout
+        payload = json.loads((body or b'{}').decode('utf-8'))
+        self.last_payload = payload
+        return 200, {'Content-Type': 'application/json; charset=utf-8'}, json.dumps({
+            'id': 'chatcmpl-test',
+            'object': 'chat.completion',
+            'created': 1,
+            'model': 'LongCat-Flash-Thinking-2601',
+            'choices': [{'index': 0, 'message': {'role': 'assistant', 'content': 'answer-1'}, 'finish_reason': 'stop'}],
+            'usage': {'prompt_tokens': 1, 'completion_tokens': 1, 'total_tokens': 2},
+        }).encode('utf-8')
+
+
 class ServiceTests(unittest.TestCase):
     def setUp(self) -> None:
         self.env_keys = [
@@ -371,6 +457,66 @@ class ServiceTests(unittest.TestCase):
                 suggestion=None,
             ),
         )
+
+    def test_execute_openai_target_streams_chunked_sse_for_openai_provider(self) -> None:
+        transport = ChunkedStreamTransport()
+        service = self.make_service(transport)
+        target = ResolvedOpenAIRequest(provider='openrouter', model='model-a', alias=None)
+        result = service.execute_openai_target(target, {'model': 'ignored', 'stream': True, 'messages': [{'role': 'user', 'content': 'hello'}]})
+
+        self.assertTrue(result.ok)
+        self.assertIsNotNone(result.stream_chunks)
+        self.assertEqual(transport.last_payload and transport.last_payload.get('stream'), True)
+        self.assertEqual(
+            list(result.stream_chunks or []),
+            [
+                b'data: {"choices":[{"delta":{"reasoning_content":"think-1"},"index":0}]}\n\n',
+                b'data: {"choices":[{"delta":{"content":"answer-1"},"index":0}]}\n\n',
+                b'data: [DONE]\n\n',
+            ],
+        )
+
+    def test_execute_openai_target_streams_http_transport_events_for_openai_provider(self) -> None:
+        transport = StreamHttpTransport()
+        service = self.make_service(transport)
+        target = ResolvedOpenAIRequest(provider='openrouter', model='model-a', alias=None)
+        result = service.execute_openai_target(target, {'model': 'ignored', 'stream': True, 'messages': [{'role': 'user', 'content': 'hello'}]})
+
+        self.assertTrue(result.ok)
+        self.assertIsNotNone(result.stream_chunks)
+        self.assertEqual(len(transport.requests), 1)
+        self.assertEqual(
+            list(result.stream_chunks or []),
+            [
+                b'data: {"choices":[{"delta":{"reasoning_content":"think-1"},"index":0}]}\n\n',
+                b'data: {"choices":[{"delta":{"content":"answer-1"},"index":0}]}\n\n',
+                b'data: [DONE]\n\n',
+            ],
+        )
+
+    def test_execute_openai_target_clamps_longcat_thinking_output_budget(self) -> None:
+        transport = StreamHttpTransport()
+        service = self.make_service(transport)
+        target = ResolvedOpenAIRequest(provider='longcat', model='LongCat-Flash-Thinking-2601', alias=None)
+        result = service.execute_openai_target(target, {'model': 'ignored', 'messages': [{'role': 'user', 'content': 'hello'}]})
+
+        self.assertTrue(result.ok)
+        self.assertEqual(len(transport.requests), 1)
+        payload = transport.requests[0][3]
+        self.assertIsInstance(payload, (bytes, bytearray))
+        body = json.loads(bytes(payload).decode('utf-8'))
+        self.assertLessEqual(int(body['max_tokens']), 1024)
+
+    def test_execute_openai_target_returns_json_for_longcat_thinking_stream_requests(self) -> None:
+        transport = LongcatFallbackTransport()
+        service = self.make_service(transport)
+        target = ResolvedOpenAIRequest(provider='longcat', model='LongCat-Flash-Thinking-2601', alias=None)
+        result = service.execute_openai_target(target, {'model': 'ignored', 'stream': True, 'messages': [{'role': 'user', 'content': 'hello'}]})
+
+        self.assertTrue(result.ok)
+        self.assertEqual(len(transport.requests), 1)
+        self.assertIsNone(result.stream_chunks)
+        self.assertEqual(result.body, b'{"id": "chatcmpl-test", "object": "chat.completion", "created": 1, "model": "LongCat-Flash-Thinking-2601", "choices": [{"index": 0, "message": {"role": "assistant", "content": "answer-1"}, "finish_reason": "stop"}], "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2}}')
 
     def test_chat_retries_once_after_token_limit_and_persists_learned_limit(self) -> None:
         transport = TokenLimitRetryTransport()
