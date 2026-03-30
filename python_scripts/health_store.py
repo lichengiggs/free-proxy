@@ -3,13 +3,13 @@ from __future__ import annotations
 import json
 import time
 from pathlib import Path
-from typing import Any
 
 
 DEFAULT_HEALTH_PATH = Path('data/model-health.json')
+HealthState = dict[str, dict[str, object]]
 
 
-def load_health(path: Path | None = None) -> dict[str, dict[str, Any]]:
+def load_health(path: Path | None = None) -> HealthState:
     target = path or DEFAULT_HEALTH_PATH
     if not target.exists():
         return {}
@@ -18,11 +18,15 @@ def load_health(path: Path | None = None) -> dict[str, dict[str, Any]]:
         return {}
     data = json.loads(raw)
     if isinstance(data, dict):
-        return data
+        normalized: HealthState = {}
+        for key, value in data.items():
+            if isinstance(key, str) and isinstance(value, dict):
+                normalized[key] = value
+        return normalized
     return {}
 
 
-def save_health(data: dict[str, dict[str, Any]], path: Path | None = None) -> None:
+def save_health(data: HealthState, path: Path | None = None) -> None:
     target = path or DEFAULT_HEALTH_PATH
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding='utf-8')

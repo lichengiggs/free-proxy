@@ -4,18 +4,27 @@ import json
 import unittest
 from unittest.mock import patch
 
-from python_scripts.client import ProviderClient, UrlLibTransport, build_url
-from python_scripts.config import get_provider_spec
 from python_scripts.errors import classify_error
+from python_scripts.provider_adapter import ProviderAdapter
+from python_scripts.provider_catalog import get_provider, list_providers
+from python_scripts.provider_errors import ProviderError
+from python_scripts.provider_transport import UrlLibTransport, build_url
 
 
 class FakeTransport:
     def __init__(self, responses: dict[tuple[str, str], tuple[int, dict[str, str], bytes]]) -> None:
         self.responses = responses
-        self.requests: list[tuple[str, str, dict[str, str] | None, bytes | None]] = []
+        self.requests: list[tuple[str, str, dict[str, str] | None, bytes | None, int]] = []
 
-    def request(self, method: str, url: str, headers: dict[str, str] | None = None, body: bytes | None = None, timeout: int = 30):
-        self.requests.append((method, url, headers, body))
+    def request(
+        self,
+        method: str,
+        url: str,
+        headers: dict[str, str] | None = None,
+        body: bytes | None = None,
+        timeout: int = 30,
+    ) -> tuple[int, dict[str, str], bytes]:
+        self.requests.append((method, url, headers, body, timeout))
         return self.responses[(method, url)]
 
 
@@ -23,7 +32,15 @@ class TimeoutTransport:
     def __init__(self) -> None:
         self.timeouts: list[int] = []
 
-    def request(self, method: str, url: str, headers: dict[str, str] | None = None, body: bytes | None = None, timeout: int = 30):
+    def request(
+        self,
+        method: str,
+        url: str,
+        headers: dict[str, str] | None = None,
+        body: bytes | None = None,
+        timeout: int = 30,
+    ) -> tuple[int, dict[str, str], bytes]:
+        del method, url, headers, body
         self.timeouts.append(timeout)
         raise TimeoutError('The read operation timed out')
 
@@ -57,9 +74,9 @@ class ClientTests(unittest.TestCase):
         fake_response.headers.items.return_value = [('content-type', 'application/json')]
         fake_response.read.return_value = b'{}'
 
-        with patch('python_scripts.client.certifi.where', return_value='/tmp/test-cert.pem') as where_mock, \
-             patch('python_scripts.client.ssl.create_default_context', return_value='ssl-context') as context_mock, \
-             patch('python_scripts.client.urlopen', return_value=fake_response) as urlopen_mock:
+        with patch('python_scripts.provider_transport.certifi.where', return_value='/tmp/test-cert.pem') as where_mock, \
+             patch('python_scripts.provider_transport.ssl.create_default_context', return_value='ssl-context') as context_mock, \
+             patch('python_scripts.provider_transport.urlopen', return_value=fake_response) as urlopen_mock:
             transport = UrlLibTransport()
             status, headers, body = transport.request('GET', 'https://example.com/models')
 
@@ -71,47 +88,47 @@ class ClientTests(unittest.TestCase):
         self.assertEqual(urlopen_mock.call_args.kwargs['context'], 'ssl-context')
 
     def test_urllib_transport_converts_timeout_to_provider_error(self) -> None:
-        with patch('python_scripts.client.certifi.where', return_value='/tmp/test-cert.pem'), \
-             patch('python_scripts.client.ssl.create_default_context', return_value='ssl-context'), \
-             patch('python_scripts.client.urlopen', side_effect=TimeoutError('The read operation timed out')):
+        with patch('python_scripts.provider_transport.certifi.where', return_value='/tmp/test-cert.pem'), \
+             patch('python_scripts.provider_transport.ssl.create_default_context', return_value='ssl-context'), \
+             patch('python_scripts.provider_transport.urlopen', side_effect=TimeoutError('The read operation timed out')):
             transport = UrlLibTransport()
-            with self.assertRaises(Exception) as ctx:
+            with self.assertRaises(ProviderError) as ctx:
                 transport.request('GET', 'https://example.com/models')
         self.assertIn('网络连接失败', str(ctx.exception))
 
-    def test_openai_list_models_and_chat(self) -> None:
-        spec = get_provider_spec('openrouter')
+    def test_openai_list_models_and_chat_text(self) -> None:
+        provider = get_provider('openrouter')
         transport = FakeTransport({
-            ('GET', 'https://openrouter.ai/api/v1/models'): (200, {}, json.dumps({'data': [{'id': 'a'}, {'id': 'b'}]}).encode()),
+            ('GET', 'https://openrouter.ai/api/v1/models'): (200, {}, json.dumps({'data': [{'id': 'openrouter/auto:free'}, {'id': 'b', 'pricing': {'prompt': '0', 'completion': '0'}}]}).encode()),
             ('POST', 'https://openrouter.ai/api/v1/chat/completions'): (200, {}, json.dumps({'choices': [{'message': {'content': 'ok'}}]}).encode()),
         })
-        client = ProviderClient(spec=spec, api_key='x', transport=transport)
-        self.assertEqual(client.list_models(), ['a', 'b'])
-        self.assertEqual(client.chat('a', 'ok'), 'ok')
+        adapter = ProviderAdapter(provider=provider, api_key='x', transport=transport)
+        self.assertEqual(adapter.list_models(), ['openrouter/auto:free', 'b'])
+        self.assertEqual(adapter.chat_text('openrouter/auto:free', 'ok'), 'ok')
 
     def test_openai_chat_uses_requested_max_tokens(self) -> None:
-        spec = get_provider_spec('openrouter')
+        provider = get_provider('openrouter')
         transport = FakeTransport({
             ('POST', 'https://openrouter.ai/api/v1/chat/completions'): (200, {}, json.dumps({'choices': [{'message': {'content': 'ok'}}]}).encode()),
         })
-        client = ProviderClient(spec=spec, api_key='x', transport=transport)
-        self.assertEqual(client.chat('a', 'hello', max_tokens=256), 'ok')
+        adapter = ProviderAdapter(provider=provider, api_key='x', transport=transport)
+        self.assertEqual(adapter.chat_text('a', 'hello', max_tokens=256), 'ok')
 
-        _, _, _, body = transport.requests[-1]
+        _, _, _, body, _ = transport.requests[-1]
         payload = json.loads((body or b'{}').decode('utf-8'))
         self.assertEqual(payload['max_tokens'], 256)
 
     def test_openai_chat_raises_when_content_is_null(self) -> None:
-        spec = get_provider_spec('openrouter')
+        provider = get_provider('openrouter')
         transport = FakeTransport({
             ('POST', 'https://openrouter.ai/api/v1/chat/completions'): (200, {}, json.dumps({'choices': [{'message': {'content': None}}]}).encode()),
         })
-        client = ProviderClient(spec=spec, api_key='x', transport=transport)
-        with self.assertRaises(Exception):
-            client.chat('a', 'ok')
+        adapter = ProviderAdapter(provider=provider, api_key='x', transport=transport)
+        with self.assertRaises(ProviderError):
+            adapter.chat_text('a', 'ok')
 
     def test_openrouter_only_keeps_free_or_zero_cost_models(self) -> None:
-        spec = get_provider_spec('openrouter')
+        provider = get_provider('openrouter')
         transport = FakeTransport({
             ('GET', 'https://openrouter.ai/api/v1/models'): (
                 200,
@@ -127,54 +144,54 @@ class ClientTests(unittest.TestCase):
                 ).encode(),
             )
         })
-        client = ProviderClient(spec=spec, api_key='x', transport=transport)
-        self.assertEqual(client.list_models(), ['openrouter/auto:free', 'zero-cost'])
+        adapter = ProviderAdapter(provider=provider, api_key='x', transport=transport)
+        self.assertEqual(adapter.list_models(), ['openrouter/auto:free', 'zero-cost'])
 
     def test_github_uses_preview_version(self) -> None:
-        spec = get_provider_spec('github')
+        provider = get_provider('github')
         transport = FakeTransport({
-            ('GET', 'https://models.github.ai/inference/models'): (404, {}, b'not found'),
+            ('GET', 'https://models.github.ai/inference/models?api-version=2024-12-01-preview'): (404, {}, b'not found'),
             ('POST', 'https://models.github.ai/inference/chat/completions?api-version=2024-12-01-preview'): (200, {}, json.dumps({'choices': [{'message': {'content': 'ok'}}]}).encode()),
         })
-        client = ProviderClient(spec=spec, api_key='x', transport=transport)
-        self.assertEqual(client.list_models(), ['gpt-4o', 'gpt-4o-mini', 'gpt-4.1-mini', 'DeepSeek-V3-0324'])
-        self.assertEqual(client.chat('gpt-4o-mini', 'ok'), 'ok')
+        adapter = ProviderAdapter(provider=provider, api_key='x', transport=transport)
+        self.assertEqual(adapter.list_models(), ['gpt-4o', 'gpt-4o-mini', 'gpt-4.1-mini', 'DeepSeek-V3-0324'])
+        self.assertEqual(adapter.chat_text('gpt-4o-mini', 'ok'), 'ok')
 
     def test_groq_model_hint_fallback_on_list_error(self) -> None:
-        spec = get_provider_spec('groq')
+        provider = get_provider('groq')
         transport = FakeTransport({
             ('GET', 'https://api.groq.com/openai/v1/models'): (403, {}, json.dumps({'error': {'message': 'forbidden'}}).encode()),
             ('POST', 'https://api.groq.com/openai/v1/chat/completions'): (200, {}, json.dumps({'choices': [{'message': {'content': 'ok'}}]}).encode()),
         })
-        client = ProviderClient(spec=spec, api_key='x', transport=transport)
-        self.assertEqual(client.list_models(), ['llama-3.1-8b-instant', 'llama-3.3-70b-versatile'])
-        self.assertEqual(client.chat('llama-3.1-8b-instant', 'ok'), 'ok')
+        adapter = ProviderAdapter(provider=provider, api_key='x', transport=transport)
+        self.assertEqual(adapter.list_models(), ['llama-3.1-8b-instant', 'llama-3.3-70b-versatile'])
+        self.assertEqual(adapter.chat_text('llama-3.1-8b-instant', 'ok'), 'ok')
 
     def test_longcat_model_hint_fallback_on_list_error(self) -> None:
-        spec = get_provider_spec('longcat')
+        provider = get_provider('longcat')
         transport = FakeTransport({
             ('GET', 'https://api.longcat.chat/openai/models'): (404, {}, json.dumps({'error': {'message': 'not found'}}).encode()),
             ('POST', 'https://api.longcat.chat/openai/chat/completions'): (200, {}, json.dumps({'choices': [{'message': {'content': 'ok'}}]}).encode()),
         })
-        client = ProviderClient(spec=spec, api_key='x', transport=transport)
+        adapter = ProviderAdapter(provider=provider, api_key='x', transport=transport)
         self.assertEqual(
-            client.list_models(),
+            adapter.list_models(),
             ['LongCat-Flash-Lite', 'LongCat-Flash-Chat', 'LongCat-Flash-Thinking', 'LongCat-Flash-Thinking-2601'],
         )
-        self.assertEqual(client.chat('LongCat-Flash-Chat', 'ok'), 'ok')
+        self.assertEqual(adapter.chat_text('LongCat-Flash-Chat', 'ok'), 'ok')
 
-    def test_gemini_normalizes_models_and_chat(self) -> None:
-        spec = get_provider_spec('gemini')
+    def test_gemini_normalizes_models_and_chat_text(self) -> None:
+        provider = get_provider('gemini')
         transport = FakeTransport({
             ('GET', 'https://generativelanguage.googleapis.com/v1beta/models'): (200, {}, json.dumps({'models': [{'id': 'models/gemini-2.0-flash'}]}).encode()),
             ('POST', 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent'): (200, {}, json.dumps({'candidates': [{'content': {'parts': [{'text': 'ok'}]}}]}).encode()),
         })
-        client = ProviderClient(spec=spec, api_key='x', transport=transport)
-        self.assertEqual(client.list_models(), ['gemini-2.0-flash'])
-        self.assertEqual(client.chat('models/gemini-2.0-flash', 'ok'), 'ok')
+        adapter = ProviderAdapter(provider=provider, api_key='x', transport=transport)
+        self.assertEqual(adapter.list_models(), ['gemini-2.0-flash'])
+        self.assertEqual(adapter.chat_text('models/gemini-2.0-flash', 'ok'), 'ok')
 
     def test_gemini_excludes_image_vision_and_embedding_models(self) -> None:
-        spec = get_provider_spec('gemini')
+        provider = get_provider('gemini')
         transport = FakeTransport({
             ('GET', 'https://generativelanguage.googleapis.com/v1beta/models'): (
                 200,
@@ -191,23 +208,32 @@ class ClientTests(unittest.TestCase):
                 ).encode(),
             ),
         })
-        client = ProviderClient(spec=spec, api_key='x', transport=transport)
-        self.assertEqual(client.list_models(), ['gemini-3.1-flash-lite-preview'])
+        adapter = ProviderAdapter(provider=provider, api_key='x', transport=transport)
+        self.assertEqual(adapter.list_models(), ['gemini-3.1-flash-lite-preview'])
 
     def test_longcat_thinking_uses_longer_timeout(self) -> None:
-        spec = get_provider_spec('longcat')
+        provider = get_provider('longcat')
         transport = TimeoutTransport()
-        client = ProviderClient(spec=spec, api_key='x', transport=transport, request_timeout_seconds=12)
-        with self.assertRaises(Exception):
-            client.chat('LongCat-Flash-Thinking-2601', 'ok')
+        adapter = ProviderAdapter(provider=provider, api_key='x', transport=transport, request_timeout_seconds=12)
+        with self.assertRaises(ProviderError):
+            adapter.chat_text('LongCat-Flash-Thinking-2601', 'ok')
         self.assertEqual(transport.timeouts[-1], 30)
 
     def test_nvidia_model_hint_fallback_on_list_error(self) -> None:
-        spec = get_provider_spec('nvidia')
+        provider = get_provider('nvidia')
         transport = FakeTransport({
             ('GET', 'https://integrate.api.nvidia.com/v1/models'): (404, {}, json.dumps({'error': {'message': 'not found'}}).encode()),
             ('POST', 'https://integrate.api.nvidia.com/v1/chat/completions'): (200, {}, json.dumps({'choices': [{'message': {'content': 'ok'}}]}).encode()),
         })
-        client = ProviderClient(spec=spec, api_key='x', transport=transport)
-        self.assertEqual(client.list_models(), ['meta/llama-3.1-70b-instruct'])
-        self.assertEqual(client.chat('meta/llama-3.1-70b-instruct', 'ok'), 'ok')
+        adapter = ProviderAdapter(provider=provider, api_key='x', transport=transport)
+        self.assertEqual(adapter.list_models(), ['meta/llama-3.1-70b-instruct'])
+        self.assertEqual(adapter.chat_text('meta/llama-3.1-70b-instruct', 'ok'), 'ok')
+
+    def test_chat_completions_raw_only_allows_openai_format(self) -> None:
+        provider = get_provider('gemini')
+        adapter = ProviderAdapter(provider=provider, api_key='x', transport=FakeTransport({}))
+        with self.assertRaises(ProviderError):
+            adapter.chat_completions_raw({'model': 'gemini-2.0-flash'})
+
+    def test_list_providers_matches_catalog(self) -> None:
+        self.assertTrue(any(item.name == 'openrouter' for item in list_providers()))
