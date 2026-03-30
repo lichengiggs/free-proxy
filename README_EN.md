@@ -1,6 +1,6 @@
 # free-proxy
 
-中文 | English
+[中文](./README.md) | [English](./README_EN.md)
 
 A local OpenAI-compatible entrypoint that combines multiple free LLM providers. Add one API key and start using it.
 

@@ -1,6 +1,6 @@
 # free-proxy
 
-中文 | English
+[中文](./README.md) | [English](./README_EN.md)
 
 把多家免费 LLM provider 聚合成一个本地 OpenAI 兼容入口。你只需要配好 API Key，就能先跑起来，再按需要切模型。
 
