@@ -9,6 +9,8 @@ from .errors import classify_error
 from .provider_catalog import ProviderMeta, get_model_capabilities, get_provider_model_hints, get_provider_required_query
 from .provider_errors import ProviderError, ProviderHTTPError
 from .provider_transport import Transport, UrlLibTransport, build_url
+from .response_normalizer import sanitize_model_text
+from .request_limiter import RequestLimiterGate
 
 JsonObject = dict[str, object]
 
@@ -28,11 +30,17 @@ class ProviderAdapter:
     api_key: str
     transport: Transport | None = None
     request_timeout_seconds: int = 12
+    request_limiter: RequestLimiterGate | None = None
     debug_log: Callable[..., None] | None = None
 
     def __post_init__(self) -> None:
         if self.transport is None:
             self.transport = UrlLibTransport()
+
+    def _reserve_request_slot(self) -> None:
+        if self.request_limiter is None:
+            return
+        self.request_limiter.acquire()
 
     def _headers(self) -> dict[str, str]:
         if self.provider.format == 'gemini':
@@ -74,6 +82,7 @@ class ProviderAdapter:
             )
         started_at = time.time()
         try:
+            self._reserve_request_slot()
             status, headers, raw = self.transport.request(
                 method,
                 build_url(self.provider.base_url, path, query),
@@ -152,6 +161,7 @@ class ProviderAdapter:
             )
         started_at = time.time()
         try:
+            self._reserve_request_slot()
             status, headers, response_body = self.transport.request(
                 'POST',
                 build_url(self.provider.base_url, '/chat/completions', get_provider_required_query(self.provider.name)),
@@ -194,6 +204,7 @@ class ProviderAdapter:
             )
         started_at = time.time()
         try:
+            self._reserve_request_slot()
             status, headers, chunks = self.transport.stream_request(
                 'POST',
                 build_url(self.provider.base_url, '/chat/completions', get_provider_required_query(self.provider.name)),
@@ -363,23 +374,23 @@ class ProviderAdapter:
         if isinstance(message, dict):
             content = message.get('content')
             if isinstance(content, str) and content.strip():
-                return content.strip()
+                return sanitize_model_text(content.strip())
             reasoning_content = message.get('reasoning_content')
             if isinstance(reasoning_content, str) and reasoning_content.strip():
-                return reasoning_content.strip()
+                return sanitize_model_text(reasoning_content.strip())
             if isinstance(content, list):
                 chunks: list[str] = []
                 for item in content:
                     if isinstance(item, dict):
                         text = item.get('text')
                         if isinstance(text, str) and text.strip():
-                            chunks.append(text.strip())
+                            chunks.append(sanitize_model_text(text.strip()))
                 merged = '\n'.join(chunks).strip()
                 if merged:
                     return merged
         text = first_choice.get('text')
         if isinstance(text, str) and text.strip():
-            return text.strip()
+            return sanitize_model_text(text.strip())
         raise ProviderError('返回内容为空或格式不正确')
 
     @staticmethod

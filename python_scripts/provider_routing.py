@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import time
 from dataclasses import dataclass
 from typing import Literal
 
@@ -12,17 +13,6 @@ HealthState = dict[str, dict[str, object]]
 
 PUBLIC_MODEL_ALIASES: tuple[dict[str, str], ...] = (
     {'id': 'free-proxy/auto', 'object': 'model', 'owned_by': 'free-proxy'},
-)
-
-STATIC_AUTO_FALLBACK: tuple[tuple[str, str], ...] = (
-    ('longcat', 'LongCat-Flash-Lite'),
-    ('gemini', 'gemini-3.1-flash-lite-preview'),
-    ('github', 'gpt-4o-mini'),
-    ('mistral', 'mistral-large-latest'),
-    ('sambanova', 'DeepSeek-V3.1-Terminus'),
-    ('openrouter', 'openrouter/auto:free'),
-    ('groq', 'llama-3.3-70b-versatile'),
-    ('nvidia', 'meta/llama-3.1-70b-instruct'),
 )
 
 
@@ -39,6 +29,30 @@ class CandidateTarget:
     model: str
     source: CandidateSource
     rank: int
+
+
+def _health_score(entry: dict[str, object], now_ts: int, ttl_seconds: int) -> int:
+    checked_at_value = entry.get('checked_at')
+    if not isinstance(checked_at_value, int):
+        return 0
+    age = max(0, now_ts - checked_at_value)
+    if age > ttl_seconds:
+        return 0
+
+    success_streak = entry.get('success_streak')
+    failure_streak = entry.get('failure_streak')
+    score = 0
+    if entry.get('ok') is True:
+        score += 1000
+        if isinstance(success_streak, int):
+            score += success_streak * 50
+        score -= age
+    else:
+        score -= 1000
+        if isinstance(failure_streak, int):
+            score -= failure_streak * 50
+        score -= age
+    return score
 
 
 def resolve_model_request(
@@ -69,11 +83,32 @@ def resolve_model_request(
     raise ValueError('no configured providers found, please save at least one API key first')
 
 
-def resolve_alias_candidates(alias: AliasName, configured: list[str]) -> list[tuple[str, str]]:
+def resolve_alias_candidates(
+    alias: AliasName,
+    configured: list[str],
+    *,
+    health: HealthState | None = None,
+    now_ts: int | None = None,
+    ttl_seconds: int = 600,
+) -> list[tuple[str, str]]:
     ordered: list[tuple[str, str]] = []
-    for provider_name, model_id in STATIC_AUTO_FALLBACK:
-        if provider_name not in configured:
-            continue
+    if alias != 'auto':
+        return ordered
+
+    snapshot = health or {}
+    timestamp = int(time.time()) if now_ts is None else now_ts
+
+    ranked: list[tuple[int, int, str, str]] = []
+    for provider_rank, provider_name in enumerate(configured):
+        hints = get_provider_model_hints(provider_name)
+        for model_id in hints:
+            score = 0
+            entry = snapshot.get(f'{provider_name}/{model_id}')
+            if isinstance(entry, dict):
+                score = _health_score(entry, timestamp, ttl_seconds)
+            ranked.append((score, -provider_rank, provider_name, model_id))
+
+    for _, _, provider_name, model_id in sorted(ranked, key=lambda item: (item[0], item[1]), reverse=True):
         pair = (provider_name, model_id)
         if pair not in ordered:
             ordered.append(pair)
@@ -95,22 +130,16 @@ def build_auto_candidates(*, requested_model: str | None, configured: list[str],
         provider_name, model_id = requested_model.split('/', 1)
         push(provider_name, model_id, 'user_requested')
 
-    for key, value in health.items():
-        if value.get('ok') is not True or not isinstance(value.get('checked_at'), int):
-            continue
-        checked_at = int(value['checked_at'])
-        if now_ts - checked_at > ttl_seconds:
-            continue
-        provider_name, model_id = key.split('/', 1)
-        push(provider_name, model_id, 'health_boosted')
-
-    for provider_name, model_id in STATIC_AUTO_FALLBACK:
-        push(provider_name, model_id, 'static_fallback_order')
-
-    for provider_name in configured:
+    ranked: list[tuple[int, int, str, str]] = []
+    for provider_rank, provider_name in enumerate(configured):
         hints = get_provider_model_hints(provider_name)
-        if hints:
-            push(provider_name, hints[0], 'provider_default')
+        for model_id in hints:
+            entry = health.get(f'{provider_name}/{model_id}')
+            score = _health_score(entry, now_ts, ttl_seconds) if isinstance(entry, dict) else 0
+            ranked.append((score, -provider_rank, provider_name, model_id))
+
+    for _, _, provider_name, model_id in sorted(ranked, key=lambda item: (item[0], item[1]), reverse=True):
+        push(provider_name, model_id, 'health_boosted' if isinstance(health.get(f'{provider_name}/{model_id}'), dict) else 'provider_default')
 
     return ordered
 

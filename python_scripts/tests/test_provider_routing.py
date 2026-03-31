@@ -28,7 +28,8 @@ class ProviderRoutingTests(unittest.TestCase):
 
     def test_resolve_alias_candidates_keeps_declared_priority(self) -> None:
         candidates = resolve_alias_candidates('auto', configured=['longcat', 'gemini', 'openrouter'])
-        self.assertEqual(candidates[:2], [('longcat', 'LongCat-Flash-Lite'), ('gemini', 'gemini-3.1-flash-lite-preview')])
+        self.assertEqual(candidates[0], ('longcat', 'LongCat-Flash-Lite'))
+        self.assertIn(('gemini', 'gemini-3.1-flash-lite-preview'), candidates)
 
     def test_auto_candidates_start_with_longcat_when_available(self) -> None:
         target = resolve_model_request(
@@ -52,8 +53,8 @@ class ProviderRoutingTests(unittest.TestCase):
             [(item.provider, item.model) for item in items[:3]],
             [
                 ('longcat', 'LongCat-Flash-Lite'),
-                ('gemini', 'gemini-3.1-flash-lite-preview'),
-                ('github', 'gpt-4o-mini'),
+                ('longcat', 'LongCat-Flash-Chat'),
+                ('longcat', 'LongCat-Flash-Thinking'),
             ],
         )
 
@@ -73,7 +74,7 @@ class ProviderRoutingTests(unittest.TestCase):
             [
                 CandidateTarget('longcat', 'LongCat-Flash-Chat', 'user_requested', 0),
                 CandidateTarget('longcat', 'LongCat-Flash-Lite', 'health_boosted', 1),
-                CandidateTarget('openrouter', 'openrouter/auto:free', 'static_fallback_order', 2),
+                CandidateTarget('longcat', 'LongCat-Flash-Thinking', 'provider_default', 2),
             ],
         )
 

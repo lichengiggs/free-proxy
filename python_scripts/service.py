@@ -17,6 +17,7 @@ from .provider_catalog import configured_provider_names, get_model_capabilities,
 from .provider_errors import ProviderError, ProviderHTTPError
 from .provider_routing import AliasName, PUBLIC_MODEL_ALIASES, ResolvedModelRequest, choose_candidates, resolve_alias_candidates, resolve_model_request
 from .provider_transport import Transport
+from .request_limiter import RequestLimiterGate
 from .token_budgeting import resolve_token_budget, shrink_budget_after_limit_error
 from .token_limit_store import load_token_limits, upsert_token_limit
 from .token_policy import model_default_output_tokens, model_default_timeout_seconds, probe_output_tokens, response_token_budget, trim_prompt
@@ -69,6 +70,7 @@ class ProxyService:
         health_ttl_seconds: int = 600,
         dotenv_path: Path | None = None,
         request_timeout_seconds: int = 12,
+        outbound_rpm: int = 60,
         debug_log: Callable[..., None] | None = None,
     ) -> None:
         self.dotenv_path = dotenv_path or DOTENV_PATH
@@ -78,6 +80,7 @@ class ProxyService:
         self.token_limit_path = token_limit_path
         self.health_ttl_seconds = health_ttl_seconds
         self.request_timeout_seconds = request_timeout_seconds
+        self.request_limiter = RequestLimiterGate(outbound_rpm, 60)
         self.debug_log = debug_log
 
     def available_providers(self) -> list[str]:
@@ -96,6 +99,7 @@ class ProxyService:
             api_key=api_key,
             transport=self.transport,
             request_timeout_seconds=self.request_timeout_seconds,
+            request_limiter=self.request_limiter,
             debug_log=self.debug_log,
         )
 
@@ -103,6 +107,7 @@ class ProxyService:
         return OpenAIRelay(
             adapter_factory=self.provider_adapter,
             health_loader=lambda: load_health(self.health_path),
+            health_updater=lambda provider, model, ok, reason=None: upsert_health(provider, model, ok, reason, path=self.health_path),
             health_ttl_seconds=self.health_ttl_seconds,
             configured_providers_loader=self.available_providers,
         )
@@ -439,7 +444,13 @@ class ProxyService:
         return self.forward_direct_chat(target.provider, target.model, payload)
 
     def forward_alias_chat(self, alias: AliasName, payload: JsonObject) -> OpenAIForwardResult:
-        candidates = resolve_alias_candidates(alias, self.available_providers())
+        candidates = resolve_alias_candidates(
+            alias,
+            self.available_providers(),
+            health=load_health(self.health_path),
+            now_ts=int(time.time()),
+            ttl_seconds=self.health_ttl_seconds,
+        )
         if not candidates:
             return OpenAIForwardResult(
                 ok=False,

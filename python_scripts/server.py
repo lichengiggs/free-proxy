@@ -450,6 +450,8 @@ class ApiHandler(BaseHTTPRequestHandler):
 
         if parsed.path == '/v1/chat/completions':
             try:
+                payload = dict(payload)
+                payload['client_hint'] = user_agent_class
                 relay = self.service.openai_relay()
                 request = relay.normalize(payload)
             except ValueError as exc:

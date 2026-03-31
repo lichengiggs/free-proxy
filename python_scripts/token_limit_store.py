@@ -2,16 +2,28 @@ from __future__ import annotations
 
 import json
 import time
+from copy import deepcopy
 from pathlib import Path
+
+from cachetools import TTLCache
 
 
 DEFAULT_TOKEN_LIMIT_PATH = Path('data/token-limits.json')
 
 TokenLimitState = dict[str, dict[str, int | str]]
+_TOKEN_LIMIT_CACHE: TTLCache[str, TokenLimitState] = TTLCache(maxsize=8, ttl=30)
+
+
+def _clone_state(data: TokenLimitState) -> TokenLimitState:
+    return deepcopy(data)
 
 
 def load_token_limits(path: Path | None = None) -> TokenLimitState:
     target = path or DEFAULT_TOKEN_LIMIT_PATH
+    cache_key = str(target)
+    cached = _TOKEN_LIMIT_CACHE.get(cache_key)
+    if cached is not None:
+        return _clone_state(cached)
     if not target.exists():
         return {}
     raw = target.read_text(encoding='utf-8').strip()
@@ -33,6 +45,7 @@ def load_token_limits(path: Path | None = None) -> TokenLimitState:
                 normalized[field] = item
         if normalized:
             state[key] = normalized
+    _TOKEN_LIMIT_CACHE[cache_key] = _clone_state(state)
     return state
 
 
@@ -54,5 +67,6 @@ def upsert_token_limit(
         'source': source,
         'updated_at': int(time.time()) if now_ts is None else int(now_ts),
     }
+    _TOKEN_LIMIT_CACHE[str(target)] = _clone_state(state)
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text(json.dumps(state, ensure_ascii=False, indent=2), encoding='utf-8')

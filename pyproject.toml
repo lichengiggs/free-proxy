@@ -3,7 +3,13 @@ name = "free-proxy"
 version = "0.1.0"
 description = "聚合多家 provider 免费层的本地代理服务"
 requires-python = ">=3.11"
-dependencies = ["certifi>=2024.0.0"]
+dependencies = [
+    "aiolimiter>=1.2.1",
+    "cachetools>=5.5.2",
+    "certifi>=2024.0.0",
+    "httpx>=0.28.1",
+    "tenacity>=9.0.0",
+]
 
 [project.scripts]
 free-proxy = "python_scripts.cli:main"

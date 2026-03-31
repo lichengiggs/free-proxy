@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from collections.abc import Iterable
 import json
 import time
@@ -12,6 +13,61 @@ class RelayResponse:
     headers: dict[str, str]
     body: bytes | None
     stream_chunks: object | None
+
+
+_LONGCAT_TOOL_CALL_MARKERS = ('<longcat_tool_call>', '<longcat_arg_key>', '<longcat_arg_value>')
+_LONGCAT_ARG_PATTERN = re.compile(
+    r'<longcat_arg_key>(?P<key>.*?)</longcat_arg_key>\s*<longcat_arg_value>(?P<value>.*?)</longcat_arg_value>',
+    re.S,
+)
+
+
+def sanitize_model_text(text: str) -> str:
+    if not text or not any(marker in text for marker in _LONGCAT_TOOL_CALL_MARKERS):
+        return text
+
+    prefix = text.split('<longcat_arg_key>', 1)[0].split('<longcat_tool_call>', 1)[0].strip()
+    question_items: list[dict[str, str]] = []
+    for match in _LONGCAT_ARG_PATTERN.finditer(text):
+        raw_value = match.group('value').strip().rstrip(',')
+        if raw_value and not raw_value.startswith('['):
+            raw_value = f'[{raw_value}]'
+        try:
+            parsed = json.loads(raw_value) if raw_value else []
+        except json.JSONDecodeError:
+            continue
+        if isinstance(parsed, dict):
+            parsed = [parsed]
+        if not isinstance(parsed, list):
+            continue
+        for item in parsed:
+            if not isinstance(item, dict):
+                continue
+            question = item.get('question')
+            if not isinstance(question, str) or not question.strip():
+                continue
+            header = item.get('header')
+            question_items.append(
+                {
+                    'header': header.strip() if isinstance(header, str) and header.strip() else '',
+                    'question': question.strip(),
+                }
+            )
+
+    if question_items:
+        lines: list[str] = []
+        if prefix:
+            lines.append(prefix)
+            lines.append('')
+        for index, item in enumerate(question_items, start=1):
+            if item['header']:
+                lines.append(f'{index}. {item["header"]}：{item["question"]}')
+            else:
+                lines.append(f'{index}. {item["question"]}')
+        return '\n'.join(lines).strip()
+
+    cleaned = prefix or text
+    return cleaned.replace('question\n', '').replace('question', '').strip()
 
 
 def _sse_json_line(payload: dict[str, object] | str) -> bytes:
@@ -27,23 +83,23 @@ def _stream_text_delta(choice: object) -> dict[str, str]:
     if isinstance(message, dict):
         content = message.get('content')
         if isinstance(content, str) and content:
-            return {'role': str(message.get('role') or 'assistant'), 'content': content}
+            return {'role': str(message.get('role') or 'assistant'), 'content': sanitize_model_text(content)}
         reasoning = message.get('reasoning_content')
         if isinstance(reasoning, str) and reasoning:
-            return {'role': str(message.get('role') or 'assistant'), 'reasoning_content': reasoning}
+            return {'role': str(message.get('role') or 'assistant'), 'reasoning_content': sanitize_model_text(reasoning)}
         if isinstance(content, list):
             chunks: list[str] = []
             for item in content:
                 if isinstance(item, dict):
                     text = item.get('text')
                     if isinstance(text, str) and text:
-                        chunks.append(text)
+                        chunks.append(sanitize_model_text(text))
             merged = ''.join(chunks)
             if merged:
                 return {'role': str(message.get('role') or 'assistant'), 'content': merged}
     text = choice.get('text')
     if isinstance(text, str) and text:
-        return {'role': 'assistant', 'content': text}
+        return {'role': 'assistant', 'content': sanitize_model_text(text)}
     return {}
 
 
@@ -67,7 +123,7 @@ def wrap_openai_body_as_sse(*, fallback_model: str, body: bytes) -> Iterable[byt
                     'object': 'chat.completion.chunk',
                     'created': created,
                     'model': actual_model,
-                    'choices': [{'index': 0, 'delta': delta, 'finish_reason': None}],
+                    'choices': [{'index': 0, 'delta': {key: sanitize_model_text(value) for key, value in delta.items()}, 'finish_reason': None}],
                 }
             )
         )
