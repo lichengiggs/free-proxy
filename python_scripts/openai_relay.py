@@ -15,6 +15,17 @@ from .response_normalizer import RelayResponse, normalize_provider_response, san
 from .token_policy import DEFAULT_POLICY, TokenPolicy, model_default_output_tokens, response_token_budget, trim_prompt
 
 
+# 允许透传给上游 OpenAI 兼容接口的标准字段白名单。
+# 客户端（如 openclaw）私有字段（client_hint 等）或非 OpenAI 标准字段（顶层 system）
+# 不得原样转发，否则严格校验的上游（如 nvidia）会直接 400。
+OPENAI_PASSTHROUGH_FIELDS = frozenset({
+    'model', 'messages', 'stream', 'max_tokens', 'max_completion_tokens',
+    'temperature', 'top_p', 'stop', 'tools', 'tool_choice', 'n', 'user',
+    'response_format', 'logit_bias', 'seed', 'stream_options',
+    'presence_penalty', 'frequency_penalty', 'parallel_tool_calls',
+})
+
+
 @dataclass(frozen=True)
 class RelayAttemptResult:
     ok: bool
@@ -157,11 +168,18 @@ class OpenAIRelay:
         return kept or trimmed_messages[-1:]
 
     def _payload_for_candidate(self, provider: str, model: str, request: ChatRequest) -> dict[str, object]:
-        payload = dict(request.raw_payload)
+        # 只透传 OpenAI 标准字段，过滤客户端私有字段（client_hint 等）
+        # 和非 OpenAI 标准字段（顶层 system），避免严格校验的上游返回 400。
+        payload = {key: value for key, value in request.raw_payload.items() if key in OPENAI_PASSTHROUGH_FIELDS}
         payload.pop('requested_model', None)
         payload['model'] = model
         payload['stream'] = False
-        payload['messages'] = self._trim_messages_for_provider(provider, request.messages)
+        messages = self._trim_messages_for_provider(provider, request.messages)
+        # 顶层 system（Claude 系客户端常见）归一化为 messages 首条 system 消息
+        system_text = request.raw_payload.get('system')
+        if isinstance(system_text, str) and system_text.strip():
+            messages = [{'role': 'system', 'content': system_text.strip()}] + messages
+        payload['messages'] = messages
         default_output = model_default_output_tokens(provider, model, response_token_budget(provider))
         requested_output = request.max_output_tokens if isinstance(request.max_output_tokens, int) and request.max_output_tokens > 0 else default_output
         payload['max_tokens'] = min(requested_output, default_output)
