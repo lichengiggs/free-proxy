@@ -11,7 +11,7 @@ from python_scripts.errors import classify_error
 from python_scripts.provider_adapter import ProviderAdapter
 from python_scripts.provider_catalog import get_provider, list_providers
 from python_scripts.provider_errors import ProviderError
-from python_scripts.provider_transport import UrlLibTransport, build_url
+from python_scripts.provider_transport import HttpxTransport, UrlLibTransport, build_url
 
 
 class FakeTransport:
@@ -73,6 +73,12 @@ class StreamingTransport:
 
 
 class ClientTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls) -> None:
+        super().setUpClass()
+        # 预热：SSL 证书上下文是进程级一次性成本（Windows 上加载约 1.7s），与 SSE 早停延迟无关
+        HttpxTransport._verify_value()
+
     def test_build_url_handles_slashes_and_query(self) -> None:
         self.assertEqual(
             build_url('https://openrouter.ai/api/v1/', '/chat/completions'),
@@ -101,7 +107,8 @@ class ClientTests(unittest.TestCase):
         fake_response.headers.items.return_value = [('content-type', 'application/json')]
         fake_response.read.return_value = b'{}'
 
-        with patch('python_scripts.provider_transport.certifi.where', return_value='/tmp/test-cert.pem') as where_mock, \
+        with patch.object(HttpxTransport, '_verify_context', None), \
+             patch('python_scripts.provider_transport.certifi.where', return_value='/tmp/test-cert.pem') as where_mock, \
              patch('python_scripts.provider_transport.ssl.create_default_context', return_value='ssl-context') as context_mock, \
              patch('python_scripts.provider_transport.urlopen', return_value=fake_response) as urlopen_mock:
             transport = UrlLibTransport()
@@ -115,7 +122,8 @@ class ClientTests(unittest.TestCase):
         self.assertEqual(urlopen_mock.call_args.kwargs['context'], 'ssl-context')
 
     def test_urllib_transport_converts_timeout_to_provider_error(self) -> None:
-        with patch('python_scripts.provider_transport.certifi.where', return_value='/tmp/test-cert.pem'), \
+        with patch.object(HttpxTransport, '_verify_context', None), \
+             patch('python_scripts.provider_transport.certifi.where', return_value='/tmp/test-cert.pem'), \
              patch('python_scripts.provider_transport.ssl.create_default_context', return_value='ssl-context'), \
              patch('python_scripts.provider_transport.urlopen', side_effect=TimeoutError('The read operation timed out')):
             transport = UrlLibTransport()
