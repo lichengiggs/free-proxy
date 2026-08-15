@@ -428,6 +428,84 @@ class OpenAIRelayTests(unittest.TestCase):
         self.assertEqual(calls[0], ('longcat', 'LongCat-Flash-Lite'))
         self.assertTrue(any(provider == 'gemini' for provider, _ in calls))
 
+    def test_payload_for_candidate_strips_non_openai_fields(self) -> None:
+        relay = OpenAIRelay(
+            adapter_factory=lambda provider: FakeAdapter(),
+            health_loader=lambda: {},
+            health_ttl_seconds=60,
+            configured_providers_loader=lambda: ['openrouter'],
+        )
+        request = ChatRequest(
+            'free-proxy/auto',
+            'nvidia/z-ai/glm-5.2',
+            [{'role': 'user', 'content': 'hi'}],
+            True,
+            1024,
+            0.7,
+            {
+                'model': 'free-proxy/auto',
+                'messages': [{'role': 'user', 'content': 'hi'}],
+                'stream': True,
+                'system': 'You are a helpful assistant.',
+                'client_hint': 'openclaw',
+                'requested_model': 'nvidia/z-ai/glm-5.2',
+                'temperature': 0.7,
+                'max_tokens': 1024,
+            },
+        )
+        payload = relay._payload_for_candidate('nvidia', 'z-ai/glm-5.2', request)
+        self.assertNotIn('client_hint', payload)
+        self.assertNotIn('system', payload)
+        self.assertNotIn('requested_model', payload)
+        self.assertEqual(payload['model'], 'z-ai/glm-5.2')
+        self.assertEqual(payload['stream'], False)
+        self.assertEqual(payload['max_tokens'], 1024)
+        self.assertEqual(payload['messages'][0]['role'], 'system')
+        self.assertEqual(payload['messages'][0]['content'], 'You are a helpful assistant.')
+        self.assertEqual(payload['temperature'], 0.7)
+
+    def test_relay_cleans_payload_and_falls_back_after_unsupported_parameter(self) -> None:
+        payloads: list[dict[str, object]] = []
+
+        class StrictAdapter:
+            def __init__(self, provider: str) -> None:
+                self.provider = provider
+
+            def forward_chat(self, payload: dict[str, object]):
+                payloads.append(payload)
+                if self.provider == 'nvidia':
+                    return type('AdapterResponse', (), {'status': 400, 'headers': {'Content-Type': 'application/json; charset=utf-8'}, 'body': b'{"message":"Validation: Unsupported parameter(s): client_hint","type":"Bad Request","code":400}', 'stream': None, 'content_type': 'application/json; charset=utf-8'})()
+                return type('AdapterResponse', (), {'status': 200, 'headers': {'Content-Type': 'application/json; charset=utf-8'}, 'body': b'{"choices":[{"message":{"content":"ok"}}]}', 'stream': None, 'content_type': 'application/json; charset=utf-8'})()
+
+        relay = OpenAIRelay(
+            adapter_factory=lambda provider: StrictAdapter(provider),
+            health_loader=lambda: {},
+            health_updater=None,
+            health_ttl_seconds=60,
+            configured_providers_loader=lambda: ['nvidia', 'openrouter'],
+        )
+        request = ChatRequest(
+            'free-proxy/auto',
+            'nvidia/z-ai/glm-5.2',
+            [{'role': 'user', 'content': 'hi'}],
+            False,
+            None,
+            None,
+            {
+                'model': 'free-proxy/auto',
+                'messages': [{'role': 'user', 'content': 'hi'}],
+                'client_hint': 'openclaw',
+                'system': 'You are a helpful assistant.',
+            },
+        )
+        response = relay.handle_chat(request)
+        self.assertEqual(response.status, 200)
+        # nvidia 的 payload 必须已清洗：无 client_hint / 顶层 system
+        self.assertNotIn('client_hint', payloads[0])
+        self.assertNotIn('system', payloads[0])
+        # 400 (unknown) 后应继续尝试 openrouter，而不是整体 stop
+        self.assertEqual(payloads[-1]['model'], 'openrouter/auto:free')
+
     def test_relay_uses_reasoning_content_when_content_is_missing(self) -> None:
         class ReasoningOnlyAdapter:
             def forward_chat(self, payload: dict[str, object]):
