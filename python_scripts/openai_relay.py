@@ -6,7 +6,7 @@ from dataclasses import dataclass
 
 from .errors import classify_error
 from .fallback_policy import FallbackContext, decide_next_action
-from .provider_catalog import configured_provider_names, get_model_capabilities, get_provider
+from .provider_catalog import configured_provider_names, get_provider
 from .provider_errors import ProviderError
 from .provider_routing import CandidateTarget, build_auto_candidates
 from .protocol_converter import gemini_json_to_openai_chat
@@ -210,21 +210,6 @@ class OpenAIRelay:
             return
         self.health_updater(provider, model, ok, reason)
 
-    @staticmethod
-    def _prioritize_interactive_clients(candidates: list[CandidateTarget], request: ChatRequest) -> list[CandidateTarget]:
-        client_hint = str(request.raw_payload.get('client_hint', '')).strip().lower()
-        if client_hint not in {'opencode', 'openclaw'}:
-            return candidates
-        provider_priority = {'longcat': 0}
-        return sorted(
-            candidates,
-            key=lambda item: (
-                provider_priority.get(item.provider, 1),
-                -int(get_model_capabilities(item.provider, item.model).get('default_output_tokens', 0) or 0),
-                item.rank,
-            ),
-        )
-
     def _append_provider_listed_candidate(self, candidates: list[CandidateTarget], provider: str, insert_at: int) -> list[CandidateTarget]:
         ordered = list(candidates)
         seen = {(item.provider, item.model) for item in ordered}
@@ -283,15 +268,12 @@ class OpenAIRelay:
         if callable(self.preferred_model_loader):
             preferred_model = str(self.preferred_model_loader() or '').strip()
         requested_model = request.requested_model or (preferred_model if preferred_model else None)
-        candidates = self._prioritize_interactive_clients(
-            build_auto_candidates(
-                requested_model=requested_model,
-                configured=self.configured_providers_loader(),
-                health=self.health_loader(),
-                now_ts=int(time.time()),
-                ttl_seconds=self.health_ttl_seconds,
-            ),
-            request,
+        candidates = build_auto_candidates(
+            requested_model=requested_model,
+            configured=self.configured_providers_loader(),
+            health=self.health_loader(),
+            now_ts=int(time.time()),
+            ttl_seconds=self.health_ttl_seconds,
         )
         same_provider_attempts = 0
         current_provider = ''

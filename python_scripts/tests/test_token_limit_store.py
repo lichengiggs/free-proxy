@@ -17,8 +17,8 @@ class TokenLimitStoreTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / 'token-limits.json'
             upsert_token_limit(
-                'longcat',
-                'LongCat-Flash-Lite',
+                'groq',
+                'llama-3.1-8b-instant',
                 input_tokens_limit=65536,
                 output_tokens_limit=4096,
                 source='default_fallback',
@@ -26,6 +26,6 @@ class TokenLimitStoreTests(unittest.TestCase):
                 now_ts=123,
             )
             saved = load_token_limits(path)
-            self.assertEqual(saved['longcat/LongCat-Flash-Lite']['input_tokens_limit'], 65536)
-            self.assertEqual(saved['longcat/LongCat-Flash-Lite']['output_tokens_limit'], 4096)
-            self.assertEqual(saved['longcat/LongCat-Flash-Lite']['updated_at'], 123)
+            self.assertEqual(saved['groq/llama-3.1-8b-instant']['input_tokens_limit'], 65536)
+            self.assertEqual(saved['groq/llama-3.1-8b-instant']['output_tokens_limit'], 4096)
+            self.assertEqual(saved['groq/llama-3.1-8b-instant']['updated_at'], 123)

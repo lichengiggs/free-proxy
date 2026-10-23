@@ -253,44 +253,6 @@ class StreamHttpTransport:
         ])
 
 
-class LongcatThinkingTransport(StreamHttpTransport):
-    def request(
-        self,
-        method: str,
-        url: str,
-        headers: dict[str, str] | None = None,
-        body: bytes | None = None,
-        timeout: int = 30,
-    ) -> tuple[int, dict[str, str], bytes]:
-        self.requests.append((method, url, headers, body, timeout))
-        return 200, {'Content-Type': 'application/json; charset=utf-8'}, json.dumps({
-            'choices': [{'message': {'role': 'assistant', 'content': 'ok'}}],
-        }).encode('utf-8')
-
-
-class LongcatFallbackTransport(StreamHttpTransport):
-    def request(
-        self,
-        method: str,
-        url: str,
-        headers: dict[str, str] | None = None,
-        body: bytes | None = None,
-        timeout: int = 30,
-    ) -> tuple[int, dict[str, str], bytes]:
-        self.requests.append((method, url, headers, body, timeout))
-        del timeout
-        payload = json.loads((body or b'{}').decode('utf-8'))
-        self.last_payload = payload
-        return 200, {'Content-Type': 'application/json; charset=utf-8'}, json.dumps({
-            'id': 'chatcmpl-test',
-            'object': 'chat.completion',
-            'created': 1,
-            'model': 'LongCat-Flash-Thinking-2601',
-            'choices': [{'index': 0, 'message': {'role': 'assistant', 'content': 'answer-1'}, 'finish_reason': 'stop'}],
-            'usage': {'prompt_tokens': 1, 'completion_tokens': 1, 'total_tokens': 2},
-        }).encode('utf-8')
-
-
 class JsonFallbackStreamTransport(StreamHttpTransport):
     def stream_request(
         self,
@@ -310,21 +272,6 @@ class JsonFallbackStreamTransport(StreamHttpTransport):
                 'choices': [{'index': 0, 'message': {'role': 'assistant', 'content': 'answer-json'}, 'finish_reason': 'stop'}],
                 'usage': {'prompt_tokens': 1, 'completion_tokens': 1, 'total_tokens': 2},
             }).encode('utf-8')
-        ])
-
-
-class ErrorBodyStreamTransport(StreamHttpTransport):
-    def stream_request(
-        self,
-        method: str,
-        url: str,
-        headers: dict[str, str] | None = None,
-        body: bytes | None = None,
-        timeout: int = 30,
-    ) -> tuple[int, dict[str, str], object]:
-        self.requests.append((method, url, headers, body, timeout))
-        return 401, {'Content-Type': 'application/json; charset=utf-8'}, iter([
-            json.dumps({'error': {'message': 'invalid api key'}}).encode('utf-8')
         ])
 
 
@@ -410,15 +357,6 @@ class ServiceTests(unittest.TestCase):
             self.assertEqual(transport.last_payload and transport.last_payload.get('stream'), False)
             self.assertEqual(transport.last_payload and transport.last_payload.get('messages'), [{'role': 'user', 'content': 'hello'}])
 
-    def test_longcat_thinking_probe_uses_larger_output_budget(self) -> None:
-        transport = FallbackTransport()
-        with tempfile.TemporaryDirectory() as tmp:
-            service = ProxyService(transport=transport, health_path=Path(tmp) / 'health.json')
-            result = service.probe('longcat', 'LongCat-Flash-Thinking-2601')
-
-            self.assertTrue(result.ok)
-            self.assertEqual(transport.max_tokens[0], 256)
-
     def test_probe_keeps_small_output_budget_for_non_thinking_models(self) -> None:
         transport = FallbackTransport()
         with tempfile.TemporaryDirectory() as tmp:
@@ -436,15 +374,17 @@ class ServiceTests(unittest.TestCase):
 
             before = service.provider_key_statuses()
             self.assertFalse(before['openrouter']['configured'])
-            self.assertFalse(before['longcat']['configured'])
+            self.assertFalse(before['groq']['configured'])
+            self.assertNotIn('longcat', before)
 
             service.save_provider_key('openrouter', 'sk-example-123456')
-            service.save_provider_key('longcat', 'lc-example-123456')
+            service.save_provider_key('groq', 'groq-example-123456')
             after = service.provider_key_statuses()
             self.assertTrue(after['openrouter']['configured'])
             self.assertIn('***', after['openrouter']['masked'])
-            self.assertTrue(after['longcat']['configured'])
-            self.assertEqual(after['longcat']['env'], 'LONGCAT_API_KEY')
+            self.assertTrue(after['groq']['configured'])
+            self.assertEqual(after['groq']['env'], 'GROQ_API_KEY')
+            self.assertNotIn('longcat', after)
 
     def test_save_and_load_preferred_model(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -456,9 +396,9 @@ class ServiceTests(unittest.TestCase):
                 token_limit_path=self.token_limit_path,
             )
 
-            result = service.save_preferred_model('longcat', 'LongCat-Flash-Chat')
+            result = service.save_preferred_model('groq', 'llama-3.1-8b-instant')
             self.assertTrue(result['ok'])
-            self.assertEqual(service.preferred_model(), 'longcat/LongCat-Flash-Chat')
+            self.assertEqual(service.preferred_model(), 'groq/llama-3.1-8b-instant')
 
     def test_verify_provider_key_and_recommended_models(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -507,9 +447,9 @@ class ServiceTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             env_path = Path(tmp) / '.env'
             service = self.make_service(SslVerifyFailTransport(), dotenv_path=env_path)
-            service.save_provider_key('longcat', 'lc-example-123456')
+            service.save_provider_key('groq', 'groq-example-123456')
 
-            verify = service.verify_provider_key('longcat')
+            verify = service.verify_provider_key('groq')
             self.assertFalse(verify['ok'])
             self.assertEqual(verify['category'], 'network')
             self.assertIn('检查网络', verify['suggestion'])
@@ -608,54 +548,6 @@ class ServiceTests(unittest.TestCase):
         self.assertEqual(transport.last_payload and transport.last_payload.get('stream'), False)
         self.assertIsNotNone(result.body)
 
-    def test_execute_openai_target_clamps_longcat_thinking_output_budget(self) -> None:
-        transport = StreamHttpTransport()
-        service = self.make_service(transport)
-        target = ResolvedOpenAIRequest(provider='longcat', model='LongCat-Flash-Thinking-2601', alias=None)
-        result = service.execute_openai_target(target, {'model': 'ignored', 'messages': [{'role': 'user', 'content': 'hello'}]})
-
-        self.assertTrue(result.ok)
-        self.assertEqual(len(transport.requests), 1)
-        payload = transport.requests[0][3]
-        self.assertIsInstance(payload, (bytes, bytearray))
-        body = json.loads(bytes(payload).decode('utf-8'))
-        self.assertLessEqual(int(body['max_tokens']), 1024)
-
-    def test_execute_openai_target_ignores_stream_flag_for_longcat_thinking(self) -> None:
-        transport = StreamHttpTransport()
-        service = self.make_service(transport)
-        target = ResolvedOpenAIRequest(provider='longcat', model='LongCat-Flash-Thinking-2601', alias=None)
-        result = service.execute_openai_target(target, {'model': 'ignored', 'stream': True, 'messages': [{'role': 'user', 'content': 'hello'}]})
-
-        self.assertTrue(result.ok)
-        self.assertIsNone(result.stream_chunks)
-        self.assertEqual(len(transport.requests), 1)
-        payload = transport.requests[0][3]
-        self.assertIsInstance(payload, (bytes, bytearray))
-        body = json.loads(bytes(payload).decode('utf-8'))
-        self.assertEqual(body['stream'], False)
-
-    def test_execute_openai_target_uses_non_stream_transport_when_stream_requested(self) -> None:
-        transport = StreamHttpTransport()
-        service = self.make_service(transport)
-        target = ResolvedOpenAIRequest(provider='longcat', model='LongCat-Flash-Thinking-2601', alias=None)
-        result = service.execute_openai_target(target, {'model': 'ignored', 'stream': True, 'messages': [{'role': 'user', 'content': 'hello'}]})
-
-        self.assertTrue(result.ok)
-        self.assertIsNone(result.stream_chunks)
-        self.assertEqual(len(transport.requests), 1)
-
-    def test_execute_openai_target_uses_extended_timeout_for_longcat_thinking(self) -> None:
-        transport = LongcatThinkingTransport()
-        service = self.make_service(transport, request_timeout_seconds=12)
-        target = ResolvedOpenAIRequest(provider='longcat', model='LongCat-Flash-Thinking-2601', alias=None)
-
-        result = service.execute_openai_target(target, {'model': 'ignored', 'messages': [{'role': 'user', 'content': 'hello'}]})
-
-        self.assertTrue(result.ok)
-        self.assertEqual(len(transport.requests), 1)
-        self.assertGreaterEqual(transport.requests[0][4], 60)
-
     def test_execute_openai_target_ignores_stream_flag_for_non_openai_provider(self) -> None:
         transport = GeminiTransport()
         service = self.make_service(transport)
@@ -718,18 +610,3 @@ class ServiceTests(unittest.TestCase):
 
         self.assertFalse(result.ok)
         self.assertTrue(any(event == 'request_failed' for event, _ in logs))
-
-    def test_forward_direct_chat_keeps_upstream_error_body_for_stream_failures(self) -> None:
-        os.environ['LONGCAT_API_KEY'] = 'test'
-        service = self.make_service(ErrorBodyStreamTransport())
-
-        result = service.forward_direct_chat(
-            'longcat',
-            'LongCat-Flash-Chat',
-            {'provider': 'longcat', 'model': 'LongCat-Flash-Chat', 'stream': True, 'messages': [{'role': 'user', 'content': 'hello'}]},
-        )
-
-        self.assertFalse(result.ok)
-        self.assertEqual(result.status, 401)
-        self.assertEqual(result.category, 'auth')
-        self.assertIn('invalid api key', result.error or '')

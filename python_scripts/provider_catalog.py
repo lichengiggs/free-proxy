@@ -35,19 +35,6 @@ PROVIDERS: tuple[ProviderMeta, ...] = (
         model_hints=('llama-3.1-8b-instant', 'llama-3.3-70b-versatile'),
     ),
     ProviderMeta(
-        'longcat',
-        'https://api.longcat.chat/openai',
-        'LONGCAT_API_KEY',
-        'openai',
-        model_hints=('LongCat-Flash-Lite', 'LongCat-Flash-Chat', 'LongCat-Flash-Thinking', 'LongCat-Flash-Thinking-2601'),
-        model_capabilities={
-            'LongCat-Flash-Chat': {'reasoning': False, 'streaming': True, 'long_running': False, 'default_output_tokens': 4096, 'default_timeout_seconds': 60},
-            'LongCat-Flash-Lite': {'reasoning': False, 'streaming': True, 'long_running': False, 'default_output_tokens': 2048, 'default_timeout_seconds': 60},
-            'LongCat-Flash-Thinking': {'reasoning': True, 'streaming': False, 'long_running': True, 'default_output_tokens': 1024, 'default_timeout_seconds': 120},
-            'LongCat-Flash-Thinking-2601': {'reasoning': True, 'streaming': False, 'long_running': True, 'default_output_tokens': 1024, 'default_timeout_seconds': 120},
-        },
-    ),
-    ProviderMeta(
         'ofox',
         'https://api.ofox.ai/v1',
         'OFOX_API_KEY',
