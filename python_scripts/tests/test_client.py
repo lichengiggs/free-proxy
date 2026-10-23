@@ -31,23 +31,6 @@ class FakeTransport:
         return self.responses[(method, url)]
 
 
-class TimeoutTransport:
-    def __init__(self) -> None:
-        self.timeouts: list[int] = []
-
-    def request(
-        self,
-        method: str,
-        url: str,
-        headers: dict[str, str] | None = None,
-        body: bytes | None = None,
-        timeout: int = 30,
-    ) -> tuple[int, dict[str, str], bytes]:
-        del method, url, headers, body
-        self.timeouts.append(timeout)
-        raise TimeoutError('The read operation timed out')
-
-
 class StreamingTransport:
     def __init__(self) -> None:
         self.requests: list[tuple[str, str, dict[str, str] | None, bytes | None, int]] = []
@@ -307,17 +290,17 @@ class ClientTests(unittest.TestCase):
         with self.assertRaises(ProviderError):
             adapter.chat_text('a', 'ok')
 
-    def test_longcat_thinking_uses_reasoning_content_when_content_is_missing(self) -> None:
-        provider = get_provider('longcat')
+    def test_chat_text_uses_reasoning_content_when_content_is_missing(self) -> None:
+        provider = get_provider('groq')
         transport = FakeTransport({
-            ('POST', 'https://api.longcat.chat/openai/chat/completions'): (
+            ('POST', 'https://api.groq.com/openai/v1/chat/completions'): (
                 200,
                 {},
                 json.dumps({'choices': [{'message': {'role': 'assistant', 'reasoning_content': 'ok'}}]}).encode(),
             ),
         })
         adapter = ProviderAdapter(provider=provider, api_key='x', transport=transport)
-        self.assertEqual(adapter.chat_text('LongCat-Flash-Thinking-2601', 'ok'), 'ok')
+        self.assertEqual(adapter.chat_text('llama-3.1-8b-instant', 'ok'), 'ok')
 
     def test_openrouter_only_keeps_free_or_zero_cost_models(self) -> None:
         provider = get_provider('openrouter')
@@ -358,19 +341,6 @@ class ClientTests(unittest.TestCase):
         adapter = ProviderAdapter(provider=provider, api_key='x', transport=transport)
         self.assertEqual(adapter.list_models(), ['llama-3.1-8b-instant', 'llama-3.3-70b-versatile'])
         self.assertEqual(adapter.chat_text('llama-3.1-8b-instant', 'ok'), 'ok')
-
-    def test_longcat_model_hint_fallback_on_list_error(self) -> None:
-        provider = get_provider('longcat')
-        transport = FakeTransport({
-            ('GET', 'https://api.longcat.chat/openai/models'): (404, {}, json.dumps({'error': {'message': 'not found'}}).encode()),
-            ('POST', 'https://api.longcat.chat/openai/chat/completions'): (200, {}, json.dumps({'choices': [{'message': {'content': 'ok'}}]}).encode()),
-        })
-        adapter = ProviderAdapter(provider=provider, api_key='x', transport=transport)
-        self.assertEqual(
-            adapter.list_models(),
-            ['LongCat-Flash-Lite', 'LongCat-Flash-Chat', 'LongCat-Flash-Thinking', 'LongCat-Flash-Thinking-2601'],
-        )
-        self.assertEqual(adapter.chat_text('LongCat-Flash-Chat', 'ok'), 'ok')
 
     def test_ofox_only_keeps_free_suffix_models(self) -> None:
         provider = get_provider('ofox')
@@ -443,16 +413,8 @@ class ClientTests(unittest.TestCase):
         adapter = ProviderAdapter(provider=provider, api_key='x', transport=transport)
         self.assertEqual(adapter.list_models(), ['gemini-3.1-flash-lite-preview'])
 
-    def test_longcat_thinking_uses_longer_timeout(self) -> None:
-        provider = get_provider('longcat')
-        transport = TimeoutTransport()
-        adapter = ProviderAdapter(provider=provider, api_key='x', transport=transport, request_timeout_seconds=12)
-        with self.assertRaises(ProviderError):
-            adapter.chat_text('LongCat-Flash-Thinking-2601', 'ok')
-        self.assertEqual(transport.timeouts[-1], 240)
-
-    def test_longcat_thinking_chat_stream_keeps_reasoning_and_content_chunks(self) -> None:
-        provider = get_provider('longcat')
+    def test_chat_stream_keeps_reasoning_and_content_chunks(self) -> None:
+        provider = get_provider('groq')
 
         class StreamTransport(StreamingTransport):
             def stream_request(
@@ -473,7 +435,7 @@ class ClientTests(unittest.TestCase):
         transport = StreamTransport()
         adapter = ProviderAdapter(provider=provider, api_key='x', transport=transport)
         status, headers, chunks = adapter.chat_completions_stream({
-            'model': 'LongCat-Flash-Thinking-2601',
+            'model': 'llama-3.1-8b-instant',
             'messages': [{'role': 'user', 'content': 'hello'}],
             'stream': True,
         })

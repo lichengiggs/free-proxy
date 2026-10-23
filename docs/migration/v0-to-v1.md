@@ -106,5 +106,4 @@ Otherwise tools like `curl` or `opencode` may go through a local proxy, receive 
 ## Beginner Notes
 
 - Start with `free-proxy/auto` if you do not know which model to pick.
-- Longcat is usually the easiest first try.
 - If Gemini fails, try the Gemini model listed in the README and verify once first.

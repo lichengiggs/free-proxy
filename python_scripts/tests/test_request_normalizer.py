@@ -31,14 +31,14 @@ class RequestNormalizerFieldTests(unittest.TestCase):
     def test_extracts_requested_model_and_normalizes_max_tokens(self) -> None:
         payload = {
             'model': 'auto',
-            'requested_model': 'longcat/LongCat-Flash-Lite',
+            'requested_model': 'groq/llama-3.1-8b-instant',
             'messages': [{'role': 'user', 'content': 'hi'}],
             'max_completion_tokens': 321,
             'temperature': 0.2,
             'stream': True,
         }
         request = normalize_chat_request(payload)
-        self.assertEqual(request.requested_model, 'longcat/LongCat-Flash-Lite')
+        self.assertEqual(request.requested_model, 'groq/llama-3.1-8b-instant')
         self.assertEqual(request.max_output_tokens, 321)
         self.assertEqual(request.temperature, 0.2)
         self.assertTrue(request.stream)

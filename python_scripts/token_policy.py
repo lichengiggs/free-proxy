@@ -15,14 +15,12 @@ DEFAULT_POLICY = {
     'github': TokenPolicy(max_input_chars=6000, reserve_output_tokens=256),
     'groq': TokenPolicy(max_input_chars=12000, reserve_output_tokens=384),
     'openrouter': TokenPolicy(max_input_chars=16000, reserve_output_tokens=512),
-    'longcat': TokenPolicy(max_input_chars=24000, reserve_output_tokens=1024),
     'gemini': TokenPolicy(max_input_chars=24000, reserve_output_tokens=1024),
     'mistral': TokenPolicy(max_input_chars=24000, reserve_output_tokens=1024),
     'sambanova': TokenPolicy(max_input_chars=24000, reserve_output_tokens=1024),
 }
 
 PROBE_OUTPUT_TOKENS = 32
-LONGCAT_THINKING_PROBE_OUTPUT_TOKENS = 256
 
 
 def trim_prompt(provider: str, text: str) -> str:
@@ -41,9 +39,7 @@ def response_token_budget(provider: str) -> int:
 
 
 def probe_output_tokens(provider: str, model: str) -> int:
-    capabilities = get_model_capabilities(provider, model)
-    if capabilities.get('reasoning') is True:
-        return LONGCAT_THINKING_PROBE_OUTPUT_TOKENS
+    del provider, model
     return PROBE_OUTPUT_TOKENS
 
 

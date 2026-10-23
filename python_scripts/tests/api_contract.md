@@ -54,11 +54,11 @@ data: [DONE]
 
 ## POST /chat/completions (UI debug)
 
-**Request**: `{"provider": "longcat", "model": "LongCat-Flash", "messages": [...]}`
+**Request**: `{"provider": "groq", "model": "llama-3.1-8b-instant", "messages": [...]}`
 
 **Response (non-stream)**: `200 OK`
 ```json
-{"ok": true, "provider": "longcat", "model": "LongCat-Flash", "content": "..."}
+{"ok": true, "provider": "groq", "model": "llama-3.1-8b-instant", "content": "..."}
 ```
 
 **Response (stream)**: `200 OK`, `Content-Type: text/event-stream`

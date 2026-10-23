@@ -44,7 +44,7 @@
 - 职责：
   - 统一 HTTP 传输
   - 处理 OpenAI / Gemini 协议差异
-  - 保留 Longcat 超时、OpenRouter 免费模型过滤、Gemini 文本模型过滤、GitHub/Groq/Longcat/Nvidia hints fallback
+  - 保留 OpenRouter 免费模型过滤、Gemini 文本模型过滤、GitHub/Groq/Nvidia hints fallback
 
 ### 3.4 Service
 

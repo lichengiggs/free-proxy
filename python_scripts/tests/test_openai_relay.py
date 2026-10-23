@@ -27,7 +27,7 @@ class OpenAIRelayTests(unittest.TestCase):
             adapter_factory=lambda provider: adapter,
             health_loader=lambda: {},
             health_ttl_seconds=60,
-            configured_providers_loader=lambda: ['openrouter', 'longcat'],
+            configured_providers_loader=lambda: ['openrouter', 'groq'],
         )
         request = ChatRequest('free-proxy/auto', None, [{'role': 'user', 'content': 'hi'}], False, None, None, {'model': 'auto', 'messages': [{'role': 'user', 'content': 'hi'}]})
         response = relay.handle_chat(request)
@@ -80,7 +80,7 @@ class OpenAIRelayTests(unittest.TestCase):
                 self.tracker['lists'].append(self.provider)
                 if self.provider == 'openrouter':
                     return ['qwen/qwen3.6-plus-preview:free']
-                return ['LongCat-Flash-Lite']
+                return ['llama-3.1-8b-instant']
 
         tracker = {'payloads': [], 'lists': []}
         checked_at = int(time.time())
@@ -88,7 +88,7 @@ class OpenAIRelayTests(unittest.TestCase):
             adapter_factory=lambda provider: LazyAdapter(provider, tracker),
             health_loader=lambda: {'openrouter/openrouter/auto:free': {'ok': True, 'checked_at': checked_at}},
             health_ttl_seconds=60,
-            configured_providers_loader=lambda: ['openrouter', 'longcat'],
+            configured_providers_loader=lambda: ['openrouter', 'groq'],
         )
         request = ChatRequest('free-proxy/auto', None, [{'role': 'user', 'content': 'hi'}], False, None, None, {'model': 'auto', 'messages': [{'role': 'user', 'content': 'hi'}]})
         response = relay.handle_chat(request)
@@ -139,7 +139,7 @@ class OpenAIRelayTests(unittest.TestCase):
                     {
                         'status': 200,
                         'headers': {'Content-Type': 'application/json; charset=utf-8'},
-                        'body': b'{"id":"chatcmpl-test","object":"chat.completion","created":1,"model":"longcat/LongCat-Flash-Lite","choices":[{"index":0,"message":{"role":"assistant","content":"ok-stream"},"finish_reason":"stop"}],"usage":{"prompt_tokens":0,"completion_tokens":0,"total_tokens":0}}',
+                        'body': b'{"id":"chatcmpl-test","object":"chat.completion","created":1,"model":"groq/llama-3.1-8b-instant","choices":[{"index":0,"message":{"role":"assistant","content":"ok-stream"},"finish_reason":"stop"}],"usage":{"prompt_tokens":0,"completion_tokens":0,"total_tokens":0}}',
                         'stream': None,
                         'content_type': 'application/json; charset=utf-8',
                     },
@@ -149,7 +149,7 @@ class OpenAIRelayTests(unittest.TestCase):
             adapter_factory=lambda provider: JsonAdapter(),
             health_loader=lambda: {},
             health_ttl_seconds=60,
-            configured_providers_loader=lambda: ['longcat'],
+            configured_providers_loader=lambda: ['groq'],
         )
         request = ChatRequest('free-proxy/auto', None, [{'role': 'user', 'content': 'hi'}], True, None, None, {'model': 'auto', 'messages': [{'role': 'user', 'content': 'hi'}], 'stream': True})
 
@@ -174,7 +174,7 @@ class OpenAIRelayTests(unittest.TestCase):
                     {
                         'status': 200,
                         'headers': {'Content-Type': 'application/json; charset=utf-8'},
-                        'body': b'{"id":"chatcmpl-test","object":"chat.completion","created":1,"model":"longcat/LongCat-Flash-Lite","choices":[{"index":0,"message":{"role":"assistant","content":"ok-non-stream"},"finish_reason":"stop"}],"usage":{"prompt_tokens":0,"completion_tokens":0,"total_tokens":0}}',
+                        'body': b'{"id":"chatcmpl-test","object":"chat.completion","created":1,"model":"groq/llama-3.1-8b-instant","choices":[{"index":0,"message":{"role":"assistant","content":"ok-non-stream"},"finish_reason":"stop"}],"usage":{"prompt_tokens":0,"completion_tokens":0,"total_tokens":0}}',
                         'stream': None,
                         'content_type': 'application/json; charset=utf-8',
                     },
@@ -184,7 +184,7 @@ class OpenAIRelayTests(unittest.TestCase):
             adapter_factory=lambda provider: JsonAdapter(),
             health_loader=lambda: {},
             health_ttl_seconds=60,
-            configured_providers_loader=lambda: ['longcat'],
+            configured_providers_loader=lambda: ['groq'],
         )
         request = ChatRequest('free-proxy/auto', None, [{'role': 'user', 'content': 'hi'}], True, None, None, {'model': 'auto', 'messages': [{'role': 'user', 'content': 'hi'}], 'stream': True})
 
@@ -285,7 +285,7 @@ class OpenAIRelayTests(unittest.TestCase):
         self.assertEqual(payload['messages'][-1]['role'], 'assistant')
         self.assertIn('a11:', str(payload['messages'][-1]['content']))
 
-    def test_relay_prioritizes_longcat_for_interactive_clients(self) -> None:
+    def test_relay_keeps_configured_order_for_interactive_clients(self) -> None:
         calls: list[tuple[str, str]] = []
 
         class OrderedAdapter:
@@ -307,31 +307,62 @@ class OpenAIRelayTests(unittest.TestCase):
                     },
                 )()
 
+        for client_hint in ('opencode', 'openclaw'):
+            calls.clear()
+            relay = OpenAIRelay(
+                adapter_factory=lambda provider: OrderedAdapter(provider),
+                health_loader=lambda: {
+                    'openrouter/openrouter/auto:free': {'ok': True, 'checked_at': int(time.time()), 'success_streak': 9, 'failure_streak': 0},
+                    'groq/llama-3.1-8b-instant': {'ok': True, 'checked_at': int(time.time()), 'success_streak': 1, 'failure_streak': 0},
+                },
+                preferred_model_loader=lambda: 'longcat/LongCat-Flash-Chat',
+                health_ttl_seconds=60,
+                configured_providers_loader=lambda: ['openrouter', 'groq'],
+            )
+            request = ChatRequest(
+                'free-proxy/auto',
+                'longcat/LongCat-Flash-Lite',
+                [{'role': 'user', 'content': 'hi'}],
+                True,
+                None,
+                None,
+                {
+                    'model': 'auto',
+                    'requested_model': 'longcat/LongCat-Flash-Lite',
+                    'messages': [{'role': 'user', 'content': 'hi'}],
+                    'stream': True,
+                    'client_hint': client_hint,
+                },
+            )
+
+            response = relay.handle_chat(request)
+
+            self.assertEqual(response.status, 200, client_hint)
+            self.assertEqual(calls[0], ('openrouter', 'openrouter/auto:free'))
+            self.assertTrue(all(provider != 'longcat' for provider, _model in calls))
+            self.assertTrue(all('api.longcat.chat' not in model for _provider, model in calls))
+
+        calls.clear()
         relay = OpenAIRelay(
             adapter_factory=lambda provider: OrderedAdapter(provider),
-            health_loader=lambda: {
-                'openrouter/openrouter/auto:free': {'ok': True, 'checked_at': int(time.time()), 'success_streak': 9, 'failure_streak': 0},
-                'longcat/LongCat-Flash-Lite': {'ok': True, 'checked_at': int(time.time()), 'success_streak': 1, 'failure_streak': 0},
-            },
-            health_updater=None,
+            health_loader=lambda: {},
+            preferred_model_loader=lambda: 'longcat/LongCat-Flash-Chat',
             health_ttl_seconds=60,
-            configured_providers_loader=lambda: ['openrouter', 'longcat', 'groq'],
+            configured_providers_loader=lambda: ['groq'],
         )
-        request = ChatRequest(
+        saved_preference = ChatRequest(
             'free-proxy/auto',
             None,
             [{'role': 'user', 'content': 'hi'}],
             True,
             None,
             None,
-            {'model': 'auto', 'messages': [{'role': 'user', 'content': 'hi'}], 'stream': True, 'client_hint': 'opencode'},
+            {'model': 'auto', 'messages': [{'role': 'user', 'content': 'hi'}], 'stream': True, 'client_hint': 'openclaw'},
         )
-
-        response = relay.handle_chat(request)
-
+        response = relay.handle_chat(saved_preference)
         self.assertEqual(response.status, 200)
-        self.assertEqual(calls[0][0], 'longcat')
-        self.assertEqual(calls[0][1], 'LongCat-Flash-Chat')
+        self.assertEqual(calls[0], ('groq', 'llama-3.1-8b-instant'))
+        self.assertTrue(all(provider != 'longcat' for provider, _model in calls))
 
     def test_relay_prefers_saved_frontend_model_before_health_rankings(self) -> None:
         calls: list[tuple[str, str]] = []
@@ -358,18 +389,18 @@ class OpenAIRelayTests(unittest.TestCase):
         relay = OpenAIRelay(
             adapter_factory=lambda provider: OrderedAdapter(provider),
             health_loader=lambda: {
-                'longcat/LongCat-Flash-Lite': {'ok': True, 'checked_at': int(time.time()), 'success_streak': 9, 'failure_streak': 0},
+                'groq/llama-3.1-8b-instant': {'ok': True, 'checked_at': int(time.time()), 'success_streak': 9, 'failure_streak': 0},
             },
-            preferred_model_loader=lambda: 'longcat/LongCat-Flash-Chat',
+            preferred_model_loader=lambda: 'groq/llama-3.3-70b-versatile',
             health_ttl_seconds=60,
-            configured_providers_loader=lambda: ['longcat'],
+            configured_providers_loader=lambda: ['groq'],
         )
         request = ChatRequest('free-proxy/auto', None, [{'role': 'user', 'content': 'hi'}], True, None, None, {'model': 'auto', 'messages': [{'role': 'user', 'content': 'hi'}], 'stream': True})
 
         response = relay.handle_chat(request)
 
         self.assertEqual(response.status, 200)
-        self.assertEqual(calls[0], ('longcat', 'LongCat-Flash-Chat'))
+        self.assertEqual(calls[0], ('groq', 'llama-3.3-70b-versatile'))
 
     def test_relay_records_health_on_success_and_failure(self) -> None:
         events: list[tuple[str, str, bool, str | None]] = []
@@ -390,7 +421,7 @@ class OpenAIRelayTests(unittest.TestCase):
             health_loader=lambda: {},
             health_updater=lambda provider, model, ok, reason=None: events.append((provider, model, ok, reason)),
             health_ttl_seconds=60,
-            configured_providers_loader=lambda: ['longcat'],
+            configured_providers_loader=lambda: ['groq'],
         )
         request = ChatRequest('free-proxy/auto', None, [{'role': 'user', 'content': 'hi'}], False, None, None, {'model': 'auto', 'messages': [{'role': 'user', 'content': 'hi'}]})
 
@@ -398,8 +429,8 @@ class OpenAIRelayTests(unittest.TestCase):
 
         self.assertEqual(response.status, 200)
         self.assertGreaterEqual(len(events), 2)
-        self.assertEqual(events[0][:3], ('longcat', 'LongCat-Flash-Lite', False))
-        self.assertEqual(events[-1][:3], ('longcat', 'LongCat-Flash-Chat', True))
+        self.assertEqual(events[0][:3], ('groq', 'llama-3.1-8b-instant', False))
+        self.assertEqual(events[-1][:3], ('groq', 'llama-3.3-70b-versatile', True))
 
     def test_relay_attempts_candidates_in_priority_order(self) -> None:
         calls: list[tuple[str, str]] = []
@@ -411,7 +442,7 @@ class OpenAIRelayTests(unittest.TestCase):
             def forward_chat(self, payload: dict[str, object]):
                 model = str(payload.get('model', ''))
                 calls.append((self.provider, model))
-                if self.provider == 'longcat':
+                if self.provider == 'groq':
                     return type('AdapterResponse', (), {'status': 500, 'headers': {'Content-Type': 'application/json; charset=utf-8'}, 'body': b'{"error":{"message":"server error"}}', 'stream': None, 'content_type': 'application/json; charset=utf-8'})()
                 return type('AdapterResponse', (), {'status': 200, 'headers': {'Content-Type': 'application/json; charset=utf-8'}, 'body': b'{"choices":[{"message":{"content":"ok"}}]}', 'stream': None, 'content_type': 'application/json; charset=utf-8'})()
 
@@ -419,13 +450,13 @@ class OpenAIRelayTests(unittest.TestCase):
             adapter_factory=lambda provider: OrderedAdapter(provider),
             health_loader=lambda: {},
             health_ttl_seconds=60,
-            configured_providers_loader=lambda: ['longcat', 'gemini', 'github'],
+            configured_providers_loader=lambda: ['groq', 'gemini', 'github'],
         )
         request = ChatRequest('free-proxy/auto', None, [{'role': 'user', 'content': 'hi'}], False, None, None, {'model': 'auto', 'messages': [{'role': 'user', 'content': 'hi'}]})
         response = relay.handle_chat(request)
 
         self.assertEqual(response.status, 200)
-        self.assertEqual(calls[0], ('longcat', 'LongCat-Flash-Lite'))
+        self.assertEqual(calls[0], ('groq', 'llama-3.1-8b-instant'))
         self.assertTrue(any(provider == 'gemini' for provider, _ in calls))
 
     def test_relay_uses_reasoning_content_when_content_is_missing(self) -> None:
@@ -448,7 +479,7 @@ class OpenAIRelayTests(unittest.TestCase):
             adapter_factory=lambda provider: ReasoningOnlyAdapter(),
             health_loader=lambda: {},
             health_ttl_seconds=60,
-            configured_providers_loader=lambda: ['longcat'],
+            configured_providers_loader=lambda: ['groq'],
         )
         request = ChatRequest('free-proxy/auto', None, [{'role': 'user', 'content': 'hi'}], False, None, None, {'model': 'auto', 'messages': [{'role': 'user', 'content': 'hi'}]})
 
@@ -498,26 +529,26 @@ class OpenAIRelayTests(unittest.TestCase):
             def forward_chat(self, payload: dict[str, object]):
                 model = str(payload.get('model', ''))
                 calls.append((self.provider, model))
-                if self.provider == 'longcat':
-                    return type('AdapterResponse', (), {'status': 200, 'headers': {'Content-Type': 'application/json; charset=utf-8'}, 'body': b'{"choices":[{"message":{"content":"ok-longcat"}}]}', 'stream': None, 'content_type': 'application/json; charset=utf-8'})()
+                if self.provider == 'groq':
+                    return type('AdapterResponse', (), {'status': 200, 'headers': {'Content-Type': 'application/json; charset=utf-8'}, 'body': b'{"choices":[{"message":{"content":"ok-groq"}}]}', 'stream': None, 'content_type': 'application/json; charset=utf-8'})()
                 return type('AdapterResponse', (), {'status': 402, 'headers': {'Content-Type': 'application/json; charset=utf-8'}, 'body': b'{"error":{"message":"insufficient credits"}}', 'stream': None, 'content_type': 'application/json; charset=utf-8'})()
 
         relay = OpenAIRelay(
             adapter_factory=lambda provider: OrderedAdapter(provider),
-            health_loader=lambda: {'longcat/LongCat-Flash-Lite': {'ok': True, 'checked_at': int(time.time()), 'success_streak': 4, 'failure_streak': 0}},
+            health_loader=lambda: {'groq/llama-3.1-8b-instant': {'ok': True, 'checked_at': int(time.time()), 'success_streak': 4, 'failure_streak': 0}},
             health_ttl_seconds=60,
-            configured_providers_loader=lambda: ['openrouter', 'groq', 'longcat', 'gemini', 'github'],
+            configured_providers_loader=lambda: ['openrouter', 'groq', 'gemini', 'github'],
         )
         request = ChatRequest('free-proxy/auto', None, [{'role': 'user', 'content': 'hi'}], True, None, None, {'model': 'auto', 'messages': [{'role': 'user', 'content': 'hi'}], 'stream': True})
 
         response = relay.handle_chat(request)
 
         self.assertEqual(response.status, 200)
-        self.assertEqual(calls[0], ('longcat', 'LongCat-Flash-Lite'))
+        self.assertEqual(calls[0], ('groq', 'llama-3.1-8b-instant'))
         self.assertIsNone(response.body)
         self.assertIsNotNone(response.stream_chunks)
         chunks = list(response.stream_chunks or [])
-        self.assertIn(b'ok-longcat', chunks[0])
+        self.assertIn(b'ok-groq', chunks[0])
 
     def test_relay_forces_stream_false_upstream_even_when_client_requests_stream(self) -> None:
         """Verify that relay always forces stream=False upstream, protecting fallback semantics."""
@@ -532,7 +563,7 @@ class OpenAIRelayTests(unittest.TestCase):
             adapter_factory=lambda provider: StreamCheckAdapter(),
             health_loader=lambda: {},
             health_ttl_seconds=60,
-            configured_providers_loader=lambda: ['longcat'],
+            configured_providers_loader=lambda: ['groq'],
         )
         request = ChatRequest('free-proxy/auto', None, [{'role': 'user', 'content': 'hi'}], True, None, None, {'model': 'auto', 'messages': [{'role': 'user', 'content': 'hi'}], 'stream': True})
         relay.handle_chat(request)
