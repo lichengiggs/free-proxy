@@ -6,7 +6,7 @@
 - 历史 TypeScript 方案已清理，不再单独保留档案
 - 当前长期技术总览只有这一份文档
 - 文档路径：`docs/research.md`
-- 2026-10-23 补充了第 10 节：按更新时间、开发难度、Star、核心完成度和合规边界筛选可拆解的开源网关。结论是借鉴路由策略和错误分类，不整仓搬迁，也不接入订阅套壳。
+- 2026-10-23 的开源对照见第 10 节。这一轮只改三件事：失败候选在冷却期内直接跳过、聊天走上游真流式、全部失败时返回可操作的诊断。不整仓搬迁，不接入订阅套壳。
 
 ## 2. 对外稳定面
 
@@ -125,11 +125,36 @@ uv run python -m unittest discover -s python_scripts/tests -p 'test_*.py'
 - 如存在代理，必须设置 `NO_PROXY=127.0.0.1,localhost` 或临时清空代理变量
 - 否则代理可能注入 `Connection: keep-alive` / `Proxy-Connection: keep-alive`，把已正常结束的 SSE 误判成服务端未关闭连接
 
-## 10. 可拆解开源项目调研（2026-10-23）
+## 10. 体验改进与开源对照（2026-10-23）
 
-数据取自 GitHub 公开仓库、README、未关闭 issue 和近期已合并 PR。时间已换算为 Asia/Shanghai。Star 与推送时间会继续变化，下面的数字是这次检索时的快照。
+这一轮从使用体验和等待时间做决定。开源仓库只提供做法，不作为底座。下面 10.2 以后是筛选证据，Star 和时间是 2026-10-23 的快照，已换算为 Asia/Shanghai。
 
-### 10.1 筛选标准
+### 10.1 这一轮要改的体验
+
+用户成功拿到回复时，仍然只看到正文，不看到换了哪一家。要缩短的是失败候选造成的空等，以及整段生成完才出现第一个字。
+
+现状：
+
+- `provider_routing.py` 的健康分会把近期失败的模型排到后面，冷却期（默认 600 秒）内仍然放进候选，下一轮请求还是可能先打到它。
+- `fallback_policy.py` 对限流算了 `sleep_seconds`，`openai_relay.py` 没有使用这个等待，失败后立刻串行请求下一家。每一家都要等自己的上游超时。
+- `errors.py` 在正文看不出额度字样时，把 HTTP 429 一律记成 `rate_limit`。免费层常用 429 表示当日额度用尽。
+- 全部候选失败时，公开接口只有 `all candidates failed`，没有 `provider`、`model`、`category`、`suggestion`。
+- 上游固定 `stream: false`，服务端再把完整 JSON 包成 SSE。控制台文案写的是在等首个流式响应，实际要等整段生成结束。
+
+按这个顺序改：
+
+1. **冷却期内跳过，不在请求里睡觉。** 限流记下 `Retry-After`，没有这个头就冷却约 60 秒，期间从 `auto` 候选里拿掉该模型。额度用尽用更长的重置窗口，并且不要在几分钟后排回队首。鉴权失败则这次停止该 provider，后续消息也不要继续撞同一把 Key。做法来自 uni-api 的渠道冷却和 Bifrost `core/failureclass.go` 里对 5xx、限流短语、余额耗尽、地区不可用的分开。地区和鉴权不在 `auto` 里无限轮换。落点是 `health_store.py`、`provider_routing.py`、`errors.py`、`fallback_policy.py`。
+2. **聊天改为上游真流式。** 客户端要求流式时，按上游流式读出并原样转给客户端，结束帧必须完整。探测继续用小输出预算，聊天用正常预算。结束帧的行为对照 new-api RelayKit 和 Bifrost，只学行为，不复制 AGPL 代码。aiproxy 的 `streamfake` 是为了避免非流式长请求被中间层掐断；当前假 SSE 已经是这一类，解决不了首字等待。
+3. **全部失败时对齐控制台诊断。** 返回最后一次失败的 `provider`、`model`、`error`、`category`、`status`、`suggestion`。验证和探测已经是这组字段。成功的请求不附带内部跳转过程。
+
+这一轮不改这些：
+
+- 冷却生效之前不新增 Cloudflare、Cerebras、Cohere。候选变多会让失败路径更长。
+- 不引入语义缓存、花费看板、虚拟 Key、多租户账单。
+- 不复制 LiteLLM `router.py`，也不复制 new-api 的 `relaykit/`。
+- 不把 `coding` 改回可用模型，不增加 `free-proxy/auto` 以外的稳定别名。
+
+### 10.2 筛选标准
 
 free-proxy 的边界是：用户用各厂商公开、合规的免费层或自己申请的 API Key，本地聚合成 `free-proxy/auto`，失败时自动换下一家，调用方只看到 OpenAI 兼容接口。不把消费者订阅、网页 Cookie、逆向协议或多人拼车包装成“免费 API”。
 
@@ -147,16 +172,16 @@ free-proxy 的边界是：用户用各厂商公开、合规的免费层或自己
 
 许可证单独看。MIT 和 Apache-2.0 可以在保留声明的前提下改写进本仓库。AGPL-3.0 和 GPL-3.0 不复制进当前 MIT 服务。
 
-### 10.2 总表
+### 10.3 总表
 
 | 项目 | Star | 最近活动（Asia/Shanghai） | 语言 / 许可证 | 难度 | 处置 |
 |---|---:|---|---|---|---|
-| [mozilla-ai/any-llm](https://github.com/mozilla-ai/any-llm) | 2,228 | 2026-10-23 17:54 发布 1.40.1 | Python / Apache-2.0 | 低 | 优先对照 provider 适配 |
-| [BerriAI/litellm](https://github.com/BerriAI/litellm) | 61,886 | 2026-10-23 18:18 仍在推送；v1.106.2 于 2026-10-21 | Python / 非 `enterprise/` 为 MIT | 高 | 只借鉴 Router 策略 |
-| [maximhq/bifrost](https://github.com/maximhq/bifrost) | 9,040 | 2026-10-23 18:37 仍在合并 PR | Go / Apache-2.0 | 高 | 借鉴 `failureclass.go` |
-| [yym68686/uni-api](https://github.com/yym68686/uni-api) | 1,269 | 2026-10-22 12:12 仍有提交 | Rust / Apache-2.0 | 中 | 借鉴官方渠道冷却；排除 Codex engine |
-| [labring/aiproxy](https://github.com/labring/aiproxy) | 564 | 2026-10-22 15:07 发布 v0.7.6 | Go / MIT | 中 | 借鉴渠道优先级和流式伪装插件 |
-| [QuantumNous/new-api](https://github.com/QuantumNous/new-api) | 50,558 | 2026-10-23 14:31 仍在推送；v1.0.0-rc.46 于 2026-10-22 | Go / AGPL-3.0 | 高 | 只读协议转换行为，不复制代码 |
+| [mozilla-ai/any-llm](https://github.com/mozilla-ai/any-llm) | 2,228 | 2026-10-23 17:54 发布 1.40.1 | Python / Apache-2.0 | 低 | 证据：官方 SDK 适配。这一轮不改目录 |
+| [BerriAI/litellm](https://github.com/BerriAI/litellm) | 61,886 | 2026-10-23 18:18 仍在推送；v1.106.2 于 2026-10-21 | Python / 非 `enterprise/` 为 MIT | 高 | 证据：限流后换候选。不搬 `router.py` |
+| [maximhq/bifrost](https://github.com/maximhq/bifrost) | 9,040 | 2026-10-23 18:37 仍在合并 PR | Go / Apache-2.0 | 高 | 这一轮用 `failureclass.go` 的分类 |
+| [yym68686/uni-api](https://github.com/yym68686/uni-api) | 1,269 | 2026-10-22 12:12 仍有提交 | Rust / Apache-2.0 | 中 | 这一轮用官方渠道冷却；排除 Codex engine |
+| [labring/aiproxy](https://github.com/labring/aiproxy) | 564 | 2026-10-22 15:07 发布 v0.7.6 | Go / MIT | 中 | 证据。`streamfake` 不解决首字等待 |
+| [QuantumNous/new-api](https://github.com/QuantumNous/new-api) | 50,558 | 2026-10-23 14:31 仍在推送；v1.0.0-rc.46 于 2026-10-22 | Go / AGPL-3.0 | 高 | 只读真流式结束行为，不复制代码 |
 | [Portkey-AI/gateway](https://github.com/Portkey-AI/gateway) | 13,257 | 最近合并 PR 停在 2026-05-25；v1.15.2 于 2026-01-12 | TypeScript / MIT | 中 | 设计参考，不再作为二次开发底稿 |
 | [tbphp/gpt-load](https://github.com/tbphp/gpt-load) | 7,166 | 2026-10-22 20:00 发布 v1.4.13 | Go / MIT | 高 | 调度思路可看；订阅渠道不碰 |
 | [cheaper-inference/OmniRoute](https://github.com/cheaper-inference/OmniRoute) | 80,077 | 2026-10-23 12:09 仍在推送 | TypeScript / MIT | 高 | 只借鉴条款风险目录；不整仓重组 |
@@ -166,7 +191,9 @@ free-proxy 的边界是：用户用各厂商公开、合规的免费层或自己
 
 Star 不能单独排序。OmniRoute、CLIProxyAPI、sub2api、9router 的 Star 都高于 any-llm、uni-api 和 aiproxy，产品里却包含订阅套壳、Cookie 或拼车。
 
-### 10.3 优先借鉴
+### 10.4 对照过的仓库
+
+下面是证据，不是平行的待办。只有 10.1 的三步进入这一轮。
 
 #### any-llm：provider 适配，不是网关
 
@@ -182,7 +209,7 @@ Star 不能单独排序。OmniRoute、CLIProxyAPI、sub2api、9router 的 Star �
 
 - 设计：同一部署先区分“再试一次”和“换下一家”。限流换候选，鉴权失败停止。这和 `fallback_policy.py` 已有的 `retry_same_provider` / `next_candidate` / `auth` 停止是同一类决策。
 - 产品：不引入虚拟 Key、花费看板和多租户。那些是网关公司的控制台，不是本仓库“配好 Key 就能用”的路径。
-- 代码：不复制 `router.py`。若要加强策略，只把“一组候选都失败后再允许一轮”写进 `fallback_policy.py`，并补测试。
+- 代码：不复制 `router.py`。限流之后换下一家的方向可以保留，额外的整组再试一轮不进入这一轮；等待用冷却跳过，不在单次请求里睡眠。
 
 #### Bifrost：错误分类表
 
@@ -208,11 +235,11 @@ README 把自己定义成个人向的 one-api 替代：一份配置聚合多家�
 
 Sealos 团队的网关。README 的主路径是 OpenAI、Claude、Gemini、Responses 之间的协议转换，按渠道优先级和错误率选路，失败再试。2026-10-22 发布 v0.7.6。GitHub 的 open issue 计数是 17，其中包含 PR；抽样到的未关闭 issue 是模型渠道、日志库和并发限制，没有“转发不可用”。有一条功能请求问 Antigravity CLI，仓库本身没有把该订阅渠道做成内置能力。
 
-- 设计：渠道排序看近期错误率，而不只看静态优先级。相同请求可以缓存。推理模型的 `<think>` 拆分是独立插件。
+- 设计：渠道排序看近期错误率，而不只看静态优先级。相同请求缓存和 `<think>` 拆分是它自己的插件，不进入这一轮。
 - 产品：`core/relay/plugin/streamfake/` 在内部用流式读取，避免非流式长回复被中间层超时掐断，再按客户端原来的形式返回。本仓库今天是上游固定 `stream: false`，再把 JSON 包成 SSE。若以后要减轻长回复超时，先看这个插件的行为，而不是先改前端滚动。
 - 代码：MIT，模块在 `core/relay/plugin/streamfake/` 和 `core/relay/adaptor/`。语言是 Go，适合移植行为并补 Python 测试，不适合原文件拷进仓库。多租户账单、组织配额不进入本仓库。
 
-### 10.4 只借鉴设计
+### 10.5 只作设计证据
 
 #### new-api
 
@@ -238,7 +265,7 @@ MIT，Star 约 8 万，README 声称一个入口覆盖大量免费层，并写�
 
 可取的是那份条款风险目录：进 `auto` 之前先标记厂商条款，风险项默认不进候选池。分层熔断（整个厂商、单把 Key、单个模型）也和现有健康状态同方向。Cookie、伪装指纹、订阅池和整仓都不重组。仓库体积和 478 个未关闭 issue 也说明它不适合拆进当前主线。
 
-### 10.5 明确不重组
+### 10.6 明确不重组
 
 这些仓库更新活跃、Star 高，核心也在持续打补丁。排除原因是产品目标和使用方式会把封号风险带进 `free-proxy/auto`。
 
@@ -256,23 +283,15 @@ MIT，Star 约 8 万，README 声称一个入口覆盖大量免费层，并写�
 - `lm-sys/RouteLLM`：5,630 Star，Apache-2.0，最后推送停在 2024-08-10。它是质量和成本路由的研究框架，不是可运行的免费层网关。
 - `tensorzero/tensorzero`：11,710 Star，2026-06 后归档。`Helicone/ai-gateway` 最后推送停在 2025-11-21，而且是 GPL-3.0。`theopenco/llmgateway` 核心是 AGPL-3.0，README 写明不接受新增 provider 的 PR，近期合并的是账单和退款邮件。
 
-### 10.6 对应到当前代码
+### 10.7 和当前代码的对应
 
-| 现有模块 | 可以吸收的行为 | 来源 | 不吸收 |
+| 顺序 | 现有模块 | 要改成 | 证据来源 |
 |---|---|---|---|
-| `fallback_policy.py` | 一组候选都试过后再允许一轮；429 换候选；鉴权停止 | LiteLLM Router，现有策略已同向 | 虚拟 Key、花费日志 |
-| `provider_errors.py` | 5xx、限流短语、余额耗尽、地区不可用分开 | Bifrost `core/failureclass.go` | 把地区错误继续轮换 |
-| `provider_routing.py` / `health_store.py` | 厂商级、Key 级、模型级冷却；冷却结束后再探测 | uni-api `src/routing.rs`，OmniRoute 的三层熔断概念 | Codex refresh token、订阅池 |
-| `provider_catalog.py` | 官方免费层条目，先核对条款再加入 hints | any-llm provider 列表；uni-api 的 Gemini / Groq / Cloudflare / OpenRouter | `tos: avoid`、Cookie、编码订阅 |
-| `response_normalizer.py` | 上游真流式的结束帧；长回复避免被中间超时切断 | new-api RelayKit 的行为，aiproxy streamfake | 复制 AGPL 代码；把探测用的小输出预算用到聊天 |
-| `openai_relay.py` | 候选顺序仍由健康、hints、静态兜底一起决定 | 上述策略都要落在这一层 | 让适配器自己做 fallback |
+| 1 | `health_store.py`、`provider_routing.py` | 冷却期内的模型不进入 `auto` 候选 | uni-api 渠道冷却 |
+| 1 | `errors.py`、`fallback_policy.py` | 限流、额度用尽、鉴权、地区分开；请求路径里不睡眠 | Bifrost `core/failureclass.go` |
+| 2 | `provider_adapter.py`、`response_normalizer.py` | 聊天按上游真流式转发，结束帧完整 | new-api RelayKit、Bifrost 的流式行为 |
+| 3 | `openai_relay.py` | 全部失败时带上最后一次的 provider、model、category、suggestion | 控制台验证和探测已有的诊断字段 |
 
-官方免费层里，当前目录还没有、且其他合规网关已经作为普通 API Key 接入的，包括 Cloudflare Workers AI、Cerebras、Cohere。它们只作为目录候选。接入前仍要核对当时的免费层条款、地域和是否必须绑卡。目录站 [abbosaliboev/free-ai-bible](https://github.com/abbosaliboev/free-ai-bible)（约 190 Star，2026-10-22 更新）、[CYBIRD-D/FREE-LLM-API-Provider](https://github.com/CYBIRD-D/FREE-LLM-API-Provider)（约 113 Star，2026-10-13 更新）只用来找名字，不作为代码来源，里面的每一家都要单独做条款判断。
+`provider_catalog.py` 里尚未收录、且合规网关已经按普通 API Key 接入的 Cloudflare Workers AI、Cerebras、Cohere，留到冷却生效之后再核对条款。目录站 [abbosaliboev/free-ai-bible](https://github.com/abbosaliboev/free-ai-bible)（约 190 Star，2026-10-22 更新）和 [CYBIRD-D/FREE-LLM-API-Provider](https://github.com/CYBIRD-D/FREE-LLM-API-Provider)（约 113 Star，2026-10-13 更新）只用来找名字。
 
-### 10.7 这次不做什么
-
-- 不把上述仓库作为子模块或 fork 底座。
-- 不把 `coding` 静默改回可用模型。旧输入继续返回 HTTP 400 和 `model_deprecated`。
-- 不增加对外模型名。稳定别名仍是 `free-proxy/auto`。
-- 不把多租户账单、组织配额、虚拟 Key 放进本地控制台。
-- 二次开发如果真的搬入 Apache-2.0 或 MIT 片段，保留原版权声明，并先写失败分类或冷却的测试，再改 `fallback_policy.py`。
+二次开发如果搬入 Apache-2.0 或 MIT 片段，保留原版权声明。冷却和错误分类先补测试，再改路由。
