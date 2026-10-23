@@ -16,7 +16,7 @@ This project is best for:
 - One stable model alias: `free-proxy/auto`
 - Automatic provider fallback when one model fails
 - A local web page for API key setup, so you do not need to edit config files by hand
-- Typical quota-friendly options: Gemini / Mistral / GitHub Models / SambaNova
+- Providers you can configure in the console: OpenRouter / Groq / Ofox / Gemini / GitHub Models / Mistral / SambaNova / NVIDIA NIM
 
 ## Stable public surface
 
@@ -68,10 +68,14 @@ Save any provider key with free quota, then use `free-proxy/auto`.
 
 | Provider | Recommended model | Best for | Notes |
 |---|---|---|---|
+| OpenRouter | `openrouter/auto:free` | free-model entry | the model list keeps free models only |
+| Groq | `llama-3.1-8b-instant` | extra option | `llama-3.3-70b-versatile` is also built in |
+| Ofox | `z-ai/glm-4.7-flash:free` | free-model extra | the model list keeps ids ending in `:free` |
 | Gemini | `gemini-3.1-flash-lite-preview` | backup option | stable free tier fallback |
 | Mistral | `mistral-large-latest` | stable backup | strong fallback quality |
 | GitHub Models | `gpt-4o` / `gpt-4o-mini` | users with Copilot access | quality is high, quota depends on account |
 | SambaNova | `DeepSeek-V3.1-Terminus` | extra option | useful as another fallback |
+| NVIDIA NIM | `meta/llama-3.1-70b-instruct` | extra option | this is the current built-in recommendation |
 
 If you only remember one rule:
 
@@ -107,6 +111,19 @@ curl -s -X POST http://127.0.0.1:8765/v1/chat/completions \
   -d '{"model":"free-proxy/auto","messages":[{"role":"user","content":"Reply with exactly OK"}]}'
 ```
 
+`/v1/chat/completions` currently behaves like this:
+
+- The default response is plain JSON
+- When the request sets `"stream": true`, the upstream call stays non-streaming and the server wraps that JSON as SSE
+
+Plain JSON example:
+
+```bash
+curl -X POST http://127.0.0.1:8765/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{"model":"free-proxy/auto","messages":[{"role":"user","content":"Reply with exactly OK"}]}'
+```
+
 For streaming checks, explicitly bypass proxies:
 
 ```bash
@@ -115,6 +132,51 @@ curl -N -X POST http://127.0.0.1:8765/v1/chat/completions \
   -H "Content-Type: application/json" \
   -d '{"model":"free-proxy/auto","messages":[{"role":"user","content":"Reply with exactly OK"}],"stream":true}'
 ```
+
+If you verify the local server with `opencode run`, clear the proxy variables the same way:
+
+```bash
+NO_PROXY=127.0.0.1,localhost HTTP_PROXY= HTTPS_PROXY= ALL_PROXY= http_proxy= https_proxy= all_proxy= \
+opencode run --print-logs --format json -m free-proxy/auto "Reply with exactly OK"
+```
+
+## Connect OpenAI SDK / OpenClaw / Opencode
+
+### OpenAI / Python SDK
+
+```python
+from openai import OpenAI
+
+client = OpenAI(
+    api_key="not-needed",
+    base_url="http://127.0.0.1:8765/v1",
+)
+
+resp = client.chat.completions.create(
+    model="free-proxy/auto",
+    messages=[{"role": "user", "content": "Reply with exactly OK"}],
+)
+print(resp.choices[0].message.content)
+```
+
+### OpenClaw
+
+The OpenClaw action on the page writes `~/.openclaw/openclaw.json`:
+
+- provider id: `free-proxy`
+- baseUrl: `http://localhost:8765/v1`
+- models: `auto`
+- default model: `free-proxy/auto`
+
+### Opencode
+
+The Opencode action on the page writes `~/.config/opencode/opencode.json`:
+
+- provider id: `free-proxy`
+- baseURL: `http://127.0.0.1:8765/v1`
+- models: `auto`
+
+The verification command is in the previous section.
 
 ## FAQ
 

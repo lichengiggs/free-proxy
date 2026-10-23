@@ -16,5 +16,5 @@
 
 ### Fixed
 - reject legacy `coding` runtime requests with explicit `model_deprecated` instead of silently falling back
-- preserve upstream SSE chunks for OpenAI-compatible streaming clients
+- wrap `/v1/chat/completions` stream responses from non-streaming upstream JSON into OpenAI SSE
 - document local proxy interference during localhost SSE verification

@@ -88,10 +88,11 @@
 
 ## 文档维护
 
-- 复杂功能或重构先写执行计划，规范见 `.agent/PLANS.md`。
-- 执行计划属于过程文档，任务完成后应清理；结论沉淀到长期文档。
-- 用户文档必须优先覆盖三条真实使用路径：
-  - OpenAI / Python SDK：`free-proxy/auto`
+- 复杂功能或重构先写执行计划。执行计划属于过程文档，任务完成后应清理；结论沉淀到长期文档。
+- 用户文档必须优先覆盖三条真实使用路径，模型都用 `free-proxy/auto`：
+  - OpenAI / Python SDK：`base_url` 为 `http://127.0.0.1:8765/v1`
+  - OpenClaw：写入 `~/.openclaw/openclaw.json`，provider `free-proxy`，`baseUrl` 为 `http://localhost:8765/v1`，模型 id 为 `auto`
+  - Opencode：写入 `~/.config/opencode/opencode.json`，provider `free-proxy`，`baseURL` 为 `http://127.0.0.1:8765/v1`，模型 id 为 `auto`
 
 ## 工具规范
 

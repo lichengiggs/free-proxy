@@ -42,15 +42,24 @@ data: [DONE]
 
 ## Error Responses
 
-**400 Bad Request** (missing model):
+**400 Bad Request** (missing or unsupported model):
 ```json
-{"error": {"message": "missing model", "type": "invalid_request_error", "param": null, "code": null}}
+{"error": {"message": "model must be 'free-proxy/auto'", "type": "invalid_request_error", "param": null, "code": null}}
+```
+
+空 `model`，以及 `auto` / `free-proxy/auto` / `free_proxy/auto` 之外的模型，都走这条错误。
+
+**400 Bad Request** (empty messages):
+```json
+{"error": {"message": "messages must not be empty", "type": "invalid_request_error", "param": null, "code": null}}
 ```
 
 **400 Bad Request** (deprecated model):
 ```json
-{"error": {"message": "...", "type": "invalid_request_error", "param": null, "code": "model_deprecated"}}
+{"error": {"message": "model 'coding' is no longer supported. Use 'free-proxy/auto' instead.", "type": "invalid_request_error", "param": null, "code": "model_deprecated"}}
 ```
+
+`coding` / `free-proxy/coding` / `free_proxy/coding` 都返回这条文案。
 
 ## POST /chat/completions (UI debug)
 
@@ -58,12 +67,10 @@ data: [DONE]
 
 **Response (non-stream)**: `200 OK`
 ```json
-{"ok": true, "provider": "groq", "model": "llama-3.1-8b-instant", "content": "..."}
+{"ok": true, "provider": "groq", "model": "llama-3.1-8b-instant", "actual_model": "llama-3.1-8b-instant", "content": "..."}
 ```
 
-**Response (stream)**: `200 OK`, `Content-Type: text/event-stream`
-```
-data: {"object":"chat.completion.chunk","choices":[{"delta":{"content":"..."},"index":0}]}
+**Response (`stream: true`)**:
 
-data: [DONE]
-```
+- OpenAI 格式 provider（如 Groq、OpenRouter）：只有该模型的 `model_capabilities.streaming` 为 `true` 时才向上游开流并原样返回 SSE。当前 catalog 没有设置这个能力，所以 `"stream": true` 仍走非流式上游，响应是上游 JSON，`Content-Type: application/json`。这不是 `{ok, content}` 包装，也不是 SSE。
+- 非 OpenAI 格式 provider（当前只有 Gemini）：忽略 `stream`。成功时返回 `{"ok": true, "provider": "...", "model": "...", "actual_model": "...", "content": "..."}`。

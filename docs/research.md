@@ -1,4 +1,4 @@
-# free-proxy 当前主线结构说明（2026-03-30）
+# free-proxy 当前主线结构说明（2026-10-23）
 
 ## 1. 结论
 
@@ -44,7 +44,8 @@
 - 职责：
   - 统一 HTTP 传输
   - 处理 OpenAI / Gemini 协议差异
-  - 保留 OpenRouter 免费模型过滤、Gemini 文本模型过滤、GitHub/Groq/Nvidia hints fallback
+  - 保留 OpenRouter 免费模型过滤、Ofox `:free` 过滤、Gemini 文本模型过滤
+  - GitHub / Groq / NVIDIA / Ofox 在 `/models` 失败或返回空列表时回退 `model_hints`
 
 ### 3.4 Service
 
@@ -65,11 +66,11 @@
   - `python_scripts/response_normalizer.py`
   - `python_scripts/openai_relay.py`
 - 职责：
-  - 校验公开模型面，只接受 `auto`
+  - 校验公开模型面，接受 `auto` / `free-proxy/auto` / `free_proxy/auto`，对外模型名归一为 `free-proxy/auto`
   - 统一提取 `requested_model`、`messages`、输出预算
   - 构建 health + hints + 静态 fallback 候选池
   - 按错误分类执行 fallback
-  - 把上游 JSON / SSE 统一收敛为 OpenAI JSON / SSE
+  - 上游调用固定 `stream: false`；客户端要求流式时，把上游 JSON 包装成 OpenAI SSE
 
 ### 3.6 HTTP Server
 
@@ -82,7 +83,7 @@
 
 ## 4. 当前路由规则
 
-- `free-proxy/auto` / `auto`：按健康驱动候选池路由
+- `free-proxy/auto` / `auto` / `free_proxy/auto`：按健康驱动候选池路由
 - `coding` / `free-proxy/coding` / `free_proxy/coding`：拒绝并返回 `model_deprecated`
 - `requested_model` 只作为内部路由偏好，不属于公开稳定接口
 
@@ -101,15 +102,13 @@
 
 ```bash
 uv run python -m unittest discover -s python_scripts/tests -p 'test_*.py'
-npm test -- --runInBand
-npx tsc --noEmit
 ```
 
 ## 7. Debug 排障模式
 
 - 启动命令：`uv run free-proxy serve --debug`
 - 作用：把请求、路由、上游状态和错误分类打印到终端
-- 约束：不打印 API key、prompt 原文、message 内容、完整响应体
+- 约束：不打印 API key；字段名是 `messages` 或 `prompt` 的值会跳过。调试路由 `/chat/completions` 可能打印响应体前 300 个字符，失败时会记录上游错误正文
 - 适用场景：远程用户无法稳定复现，只能贴终端日志
 
 ## 8. 对外文档约束

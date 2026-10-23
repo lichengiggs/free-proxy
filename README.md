@@ -16,7 +16,7 @@
 - 一个稳定模型别名：`free-proxy/auto`
 - 多 provider 自动回退，某家失败时可切到其他可用模型
 - 本地 Web 页面配置 API Key，不用手改复杂配置
-- 常见可用额度选项：Gemini / Mistral / GitHub Models / SambaNova
+- 控制台可配置的 provider：OpenRouter / Groq / Ofox / Gemini / GitHub Models / Mistral / SambaNova / NVIDIA NIM
 
 ## 当前稳定接口
 
@@ -68,10 +68,14 @@ uv run free-proxy serve
 
 | Provider | 推荐模型 | 适合场景 | 说明 |
 |---|---|---|---|
+| OpenRouter | `openrouter/auto:free` | 免费模型入口 | 模型列表只保留免费模型 |
+| Groq | `llama-3.1-8b-instant` | 补充选择 | 也可以选 `llama-3.3-70b-versatile` |
+| Ofox | `z-ai/glm-4.7-flash:free` | 免费模型补充 | 模型列表只保留以 `:free` 结尾的模型 |
 | Gemini | `gemini-3.1-flash-lite-preview` | 免费层回退 | 免费层稳定，适合回退 |
 | Mistral | `mistral-large-latest` | 稳定后备 | 质量稳，适合补位 |
 | GitHub Models | `gpt-4o` / `gpt-4o-mini` | 已有 Copilot 的用户 | 质量高，但额度取决于账号 |
 | SambaNova | `DeepSeek-V3.1-Terminus` | 补充选择 | 适合作为额外后备 |
+| NVIDIA NIM | `meta/llama-3.1-70b-instruct` | 补充选择 | 当前内置推荐是这一条 |
 
 如果你只记一条：
 
@@ -95,7 +99,7 @@ NO_PROXY=127.0.0.1,localhost
 
 或者临时清空代理变量再测。
 
-否则 `curl`、`opencode` 之类的客户端可能经过本地代理，导致本地回环请求异常。
+否则 `curl`、`opencode` 之类的客户端可能经过本地代理，收到注入的 `Connection: keep-alive` 或 `Proxy-Connection: keep-alive`，把已经正常结束的 SSE 看成连接没有关闭。
 
 ## OpenAI 兼容调用示例
 
@@ -110,7 +114,7 @@ curl -s -X POST http://127.0.0.1:8765/v1/chat/completions \
 `/v1/chat/completions` 的当前行为是：
 
 - 默认返回普通 JSON
-- 如果请求里带 `"stream": true`，服务端会把结果包装成 SSE 返回，兼容 `opencode` 这类按流式消费的客户端
+- 请求里带 `"stream": true` 时，上游仍按非流式调用，服务端再把 JSON 包装成 SSE 返回，兼容 `opencode` 这类按流式消费的客户端
 
 普通 JSON 示例：
 
@@ -135,6 +139,44 @@ curl -N -X POST http://127.0.0.1:8765/v1/chat/completions \
 NO_PROXY=127.0.0.1,localhost HTTP_PROXY= HTTPS_PROXY= ALL_PROXY= http_proxy= https_proxy= all_proxy= \
 opencode run --print-logs --format json -m free-proxy/auto "Reply with exactly OK"
 ```
+
+## 接入 OpenAI SDK / OpenClaw / Opencode
+
+### OpenAI / Python SDK
+
+```python
+from openai import OpenAI
+
+client = OpenAI(
+    api_key="not-needed",
+    base_url="http://127.0.0.1:8765/v1",
+)
+
+resp = client.chat.completions.create(
+    model="free-proxy/auto",
+    messages=[{"role": "user", "content": "Reply with exactly OK"}],
+)
+print(resp.choices[0].message.content)
+```
+
+### OpenClaw
+
+页面上的 OpenClaw 配置写入 `~/.openclaw/openclaw.json`：
+
+- provider id：`free-proxy`
+- baseUrl：`http://localhost:8765/v1`
+- models：`auto`
+- 默认模型：`free-proxy/auto`
+
+### Opencode
+
+页面上的 Opencode 配置写入 `~/.config/opencode/opencode.json`：
+
+- provider id：`free-proxy`
+- baseURL：`http://127.0.0.1:8765/v1`
+- models：`auto`
+
+验证命令见上一节。
 
 ## 常见问题
 
