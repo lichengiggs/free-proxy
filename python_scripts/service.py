@@ -10,7 +10,7 @@ from pathlib import Path
 from .config import DOTENV_PATH, hydrate_env, load_dotenv
 from .env_store import upsert_env
 from .errors import classify_error, remediation_suggestion
-from .health_store import load_health, upsert_health
+from .health_store import hash_api_key, load_health, upsert_health
 from .openai_relay import OpenAIRelay
 from .preferred_model_store import load_preferred_model, save_preferred_model
 from .provider_adapter import ProviderAdapter
@@ -106,14 +106,39 @@ class ProxyService:
             debug_log=self.debug_log,
         )
 
+    def _relay_health_update(self, provider: str, model: str, ok: bool, reason: str | None = None, **fields: object) -> None:
+        category = fields.get('category')
+        cooldown_until = fields.get('cooldown_until')
+        scope = fields.get('scope')
+        key_hash = fields.get('key_hash')
+        upsert_health(
+            provider,
+            model,
+            ok,
+            reason,
+            path=self.health_path,
+            category=category if isinstance(category, str) else None,
+            cooldown_until=cooldown_until if isinstance(cooldown_until, int) and not isinstance(cooldown_until, bool) else None,
+            scope=scope if scope in {'model', 'provider'} else None,
+            key_hash=key_hash if isinstance(key_hash, str) else None,
+        )
+
+    def _provider_key_hash(self, provider_name: str) -> str:
+        try:
+            provider = get_provider(provider_name)
+        except KeyError:
+            return ''
+        return hash_api_key(os.environ.get(provider.api_key_env, ''))
+
     def openai_relay(self) -> OpenAIRelay:
         return OpenAIRelay(
             adapter_factory=self.provider_adapter,
             health_loader=lambda: load_health(self.health_path),
-            health_updater=lambda provider, model, ok, reason=None: upsert_health(provider, model, ok, reason, path=self.health_path),
+            health_updater=self._relay_health_update,
             preferred_model_loader=lambda: load_preferred_model(self.preferred_model_path),
             health_ttl_seconds=self.health_ttl_seconds,
             configured_providers_loader=self.available_providers,
+            key_hash_loader=self._provider_key_hash,
         )
 
     def preferred_model(self) -> str | None:

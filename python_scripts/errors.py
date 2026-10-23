@@ -18,7 +18,17 @@ def classify_error(status: int, body_text: str) -> ProviderFailure:
         return ProviderFailure('auth', 'API Key 无效或权限不足', False)
     if any(token in text for token in ('model not found', 'unknown model', 'unsupported model', 'does not exist')):
         return ProviderFailure('model_not_found', '模型不存在或路径错误', False)
-    if any(token in text for token in ('quota exceeded', 'insufficient credits', 'billing', 'exceeded your current quota')):
+    if any(token in text for token in (
+        'quota exceeded',
+        'insufficient credits',
+        'insufficient_quota',
+        'billing',
+        'exceeded your current quota',
+        'credit balance',
+        'spend limit',
+        'credits are depleted',
+        'spending cap',
+    )):
         return ProviderFailure('quota', '额度不足', False)
     if any(token in text for token in ('rate limit', 'too many requests', 'retry later')):
         return ProviderFailure('rate_limit', '触发频率限制', True)

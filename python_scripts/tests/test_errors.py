@@ -13,6 +13,14 @@ class ErrorTests(unittest.TestCase):
         self.assertEqual(classify_error(400, 'maximum context length is 8192 tokens').category, 'token_limit')
         self.assertEqual(classify_error(400, 'maxOutputTokens too large').category, 'token_limit')
 
+    def test_quota_phrases_outrank_bare_429(self) -> None:
+        self.assertEqual(classify_error(429, 'credits are depleted').category, 'quota')
+        self.assertEqual(classify_error(429, 'credit balance is too low').category, 'quota')
+        self.assertEqual(classify_error(429, 'spend limit reached').category, 'quota')
+        self.assertEqual(classify_error(429, 'insufficient_quota').category, 'quota')
+        self.assertEqual(classify_error(429, 'spending cap reached').category, 'quota')
+        self.assertEqual(classify_error(429, 'slow down').category, 'rate_limit')
+
     def test_remediation_suggestion_returns_actionable_text(self) -> None:
         self.assertIn('API Key', remediation_suggestion('auth', 'groq'))
         self.assertIn('额度', remediation_suggestion('quota', 'openrouter'))

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import tempfile
@@ -58,6 +59,13 @@ def save_health(data: HealthState, path: Path | None = None) -> None:
             raise
 
 
+def hash_api_key(api_key: str) -> str:
+    normalized = (api_key or '').strip()
+    if not normalized:
+        return ''
+    return hashlib.sha256(normalized.encode('utf-8')).hexdigest()
+
+
 def upsert_health(
     provider: str,
     model: str,
@@ -66,17 +74,31 @@ def upsert_health(
     *,
     path: Path | None = None,
     now_ts: int | None = None,
+    category: str | None = None,
+    cooldown_until: int | None = None,
+    scope: str | None = None,
+    key_hash: str | None = None,
 ) -> None:
     state = load_health(path)
     key = f'{provider}/{model}'
     previous = state.get(key, {})
     previous_success = int(previous.get('success_streak', 0)) if isinstance(previous.get('success_streak', 0), int) else 0
     previous_failure = int(previous.get('failure_streak', 0)) if isinstance(previous.get('failure_streak', 0), int) else 0
-    state[key] = {
+    entry: dict[str, object] = {
         'ok': ok,
         'reason': reason,
         'checked_at': int(time.time()) if now_ts is None else int(now_ts),
         'success_streak': previous_success + 1 if ok else 0,
         'failure_streak': previous_failure + 1 if not ok else 0,
     }
+    if not ok:
+        if isinstance(category, str) and category:
+            entry['category'] = category
+        if scope in {'model', 'provider'}:
+            entry['scope'] = scope
+        if isinstance(cooldown_until, int) and not isinstance(cooldown_until, bool):
+            entry['cooldown_until'] = cooldown_until
+        if isinstance(key_hash, str) and key_hash:
+            entry['key_hash'] = key_hash
+    state[key] = entry
     save_health(state, path)

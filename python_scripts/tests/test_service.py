@@ -465,6 +465,38 @@ class ServiceTests(unittest.TestCase):
         relay = service.openai_relay()
         self.assertIsNotNone(relay)
 
+    def test_relay_health_updater_persists_cooldown_without_api_key(self) -> None:
+        previous = os.environ.get('GROQ_API_KEY')
+        os.environ['GROQ_API_KEY'] = 'test-secret-value'
+        try:
+            service = self.make_service(FakeTransport())
+            relay = service.openai_relay()
+            digest = relay.key_hash_loader('groq')
+            self.assertEqual(len(digest), 64)
+            self.assertNotIn('test-secret-value', digest)
+            relay.health_updater(
+                'groq',
+                'llama-3.1-8b-instant',
+                False,
+                'auth',
+                category='auth',
+                cooldown_until=123456,
+                scope='provider',
+                key_hash=digest,
+            )
+            saved = load_health(service.health_path)
+            entry = saved['groq/llama-3.1-8b-instant']
+            self.assertEqual(entry['cooldown_until'], 123456)
+            self.assertEqual(entry['scope'], 'provider')
+            self.assertEqual(entry['category'], 'auth')
+            self.assertEqual(entry['key_hash'], digest)
+            self.assertNotIn('test-secret-value', json.dumps(saved))
+        finally:
+            if previous is None:
+                os.environ.pop('GROQ_API_KEY', None)
+            else:
+                os.environ['GROQ_API_KEY'] = previous
+
     def test_execute_openai_target_returns_raw_forward_result_for_openai_provider(self) -> None:
         service = self.make_service(RawTransport())
         target = ResolvedOpenAIRequest(provider='openrouter', model='model-a', alias=None)

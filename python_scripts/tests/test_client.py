@@ -169,6 +169,21 @@ class ClientTests(unittest.TestCase):
         response = adapter.forward_chat({'model': 'openrouter/auto:free', 'messages': [{'role': 'user', 'content': 'hi'}]})
         self.assertEqual(response.status, 200)
         self.assertEqual(response.content_type, 'application/json; charset=utf-8')
+        self.assertIsNone(response.retry_after)
+
+    def test_forward_chat_exposes_retry_after_header(self) -> None:
+        provider = get_provider('openrouter')
+        transport = FakeTransport({
+            ('POST', 'https://openrouter.ai/api/v1/chat/completions'): (
+                429,
+                {'Content-Type': 'application/json', 'Retry-After': '30'},
+                b'{"error":{"message":"rate limit"}}',
+            ),
+        })
+        adapter = ProviderAdapter(provider=provider, api_key='x', transport=transport)
+        response = adapter.forward_chat({'model': 'openrouter/auto:free', 'messages': [{'role': 'user', 'content': 'hi'}]})
+        self.assertEqual(response.status, 429)
+        self.assertEqual(response.retry_after, '30')
 
     def test_urllib_stream_request_yields_each_sse_event(self) -> None:
         class Handler(BaseHTTPRequestHandler):

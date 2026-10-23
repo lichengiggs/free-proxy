@@ -22,6 +22,18 @@ class AdapterResponse:
     body: bytes | None
     stream: Iterable[bytes] | None
     content_type: str
+    retry_after: str | None = None
+
+
+def retry_after_from_headers(headers: dict[str, str] | None) -> str | None:
+    if not isinstance(headers, dict):
+        return None
+    for key, value in headers.items():
+        if str(key).lower() != 'retry-after':
+            continue
+        text = str(value).strip()
+        return text or None
+    return None
 
 
 @dataclass
@@ -235,10 +247,10 @@ class ProviderAdapter:
             if bool(payload.get('stream')):
                 status, headers, stream = self.chat_completions_stream(payload)
                 content_type = str(headers.get('Content-Type') or headers.get('content-type') or '')
-                return AdapterResponse(status, headers, None, stream, content_type)
+                return AdapterResponse(status, headers, None, stream, content_type, retry_after_from_headers(headers))
             status, headers, body = self.chat_completions_raw(payload)
             content_type = str(headers.get('Content-Type') or headers.get('content-type') or '')
-            return AdapterResponse(status, headers, body, None, content_type)
+            return AdapterResponse(status, headers, body, None, content_type, retry_after_from_headers(headers))
 
         prompt = self._prompt_from_payload(payload)
         max_tokens = payload.get('max_tokens')
@@ -251,7 +263,8 @@ class ProviderAdapter:
             path = f'/models/{self.normalize_model_id(str(payload.get("model", "")))}:generateContent'
             status, headers, data = self._request_json('POST', path, request_payload, timeout=self._request_timeout_seconds_for_model(str(payload.get('model', ''))))
             body = json.dumps(data, ensure_ascii=False).encode('utf-8') if not isinstance(data, str) else data.encode('utf-8')
-            return AdapterResponse(status, {'Content-Type': 'application/json; charset=utf-8', **headers}, body, None, 'application/json; charset=utf-8')
+            merged_headers = {'Content-Type': 'application/json; charset=utf-8', **headers}
+            return AdapterResponse(status, merged_headers, body, None, 'application/json; charset=utf-8', retry_after_from_headers(headers))
 
         raise ProviderError('provider format is not supported')
 

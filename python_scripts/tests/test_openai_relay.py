@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import json
 import time
 import unittest
+from unittest.mock import patch
 
+from python_scripts.fallback_policy import QUOTA_COOLDOWN_SECONDS
 from python_scripts.openai_relay import OpenAIRelay
 from python_scripts.provider_errors import ProviderError
 from python_scripts.request_normalizer import ChatRequest
@@ -44,7 +47,7 @@ class OpenAIRelayTests(unittest.TestCase):
                 self.payloads.append(payload)
                 model = str(payload.get('model', ''))
                 if model == 'openrouter/auto:free':
-                    return type('AdapterResponse', (), {'status': 402, 'headers': {'Content-Type': 'application/json; charset=utf-8'}, 'body': b'{"error":{"message":"insufficient credits"}}', 'stream': None, 'content_type': 'application/json; charset=utf-8'})()
+                    return type('AdapterResponse', (), {'status': 500, 'headers': {'Content-Type': 'application/json; charset=utf-8'}, 'body': b'{"error":{"message":"server error"}}', 'stream': None, 'content_type': 'application/json; charset=utf-8'})()
                 return type('AdapterResponse', (), {'status': 200, 'headers': {'Content-Type': 'application/json; charset=utf-8'}, 'body': b'{"choices":[{"message":{"content":"ok-listed"}}]}', 'stream': None, 'content_type': 'application/json; charset=utf-8'})()
 
             def list_models(self) -> list[str]:
@@ -73,7 +76,7 @@ class OpenAIRelayTests(unittest.TestCase):
             def forward_chat(self, payload: dict[str, object]):
                 self.tracker['payloads'].append(f'{self.provider}:{payload.get("model")}')
                 if self.provider == 'openrouter' and payload.get('model') == 'openrouter/auto:free':
-                    return type('AdapterResponse', (), {'status': 402, 'headers': {'Content-Type': 'application/json; charset=utf-8'}, 'body': b'{"error":{"message":"insufficient credits"}}', 'stream': None, 'content_type': 'application/json; charset=utf-8'})()
+                    return type('AdapterResponse', (), {'status': 500, 'headers': {'Content-Type': 'application/json; charset=utf-8'}, 'body': b'{"error":{"message":"server error"}}', 'stream': None, 'content_type': 'application/json; charset=utf-8'})()
                 return type('AdapterResponse', (), {'status': 200, 'headers': {'Content-Type': 'application/json; charset=utf-8'}, 'body': b'{"choices":[{"message":{"content":"ok-listed"}}]}', 'stream': None, 'content_type': 'application/json; charset=utf-8'})()
 
             def list_models(self) -> list[str]:
@@ -419,7 +422,7 @@ class OpenAIRelayTests(unittest.TestCase):
         relay = OpenAIRelay(
             adapter_factory=lambda provider: adapter,
             health_loader=lambda: {},
-            health_updater=lambda provider, model, ok, reason=None: events.append((provider, model, ok, reason)),
+            health_updater=lambda provider, model, ok, reason=None, **_fields: events.append((provider, model, ok, reason)),
             health_ttl_seconds=60,
             configured_providers_loader=lambda: ['groq'],
         )
@@ -646,3 +649,308 @@ class OpenAIRelayTests(unittest.TestCase):
         request = ChatRequest('free-proxy/auto', None, [{'role': 'user', 'content': 'hi'}], True, None, None, {'model': 'auto', 'messages': [{'role': 'user', 'content': 'hi'}], 'stream': True})
         relay.handle_chat(request)
         self.assertEqual(stream_values, [False])
+
+
+class _Clock:
+    def __init__(self, now: int) -> None:
+        self.now = now
+
+    def time(self) -> float:
+        return float(self.now)
+
+
+class _MemoryHealth:
+    def __init__(self, initial: dict[str, dict[str, object]] | None = None) -> None:
+        self.data = {key: dict(value) for key, value in (initial or {}).items()}
+
+    def load(self) -> dict[str, dict[str, object]]:
+        return {key: dict(value) for key, value in self.data.items()}
+
+    def update(self, provider: str, model: str, ok: bool, reason: str | None = None, **fields: object) -> None:
+        entry: dict[str, object] = {'ok': ok, 'reason': reason}
+        for name in ('category', 'scope', 'cooldown_until', 'key_hash'):
+            value = fields.get(name)
+            if value is not None:
+                entry[name] = value
+        self.data[f'{provider}/{model}'] = entry
+
+
+def _chat_request() -> ChatRequest:
+    return ChatRequest(
+        'free-proxy/auto',
+        None,
+        [{'role': 'user', 'content': 'hi'}],
+        False,
+        None,
+        None,
+        {'model': 'auto', 'messages': [{'role': 'user', 'content': 'hi'}]},
+    )
+
+
+def _adapter_response(status: int, body: bytes, headers: dict[str, str] | None = None):
+    return type(
+        'AdapterResponse',
+        (),
+        {
+            'status': status,
+            'headers': headers or {'Content-Type': 'application/json; charset=utf-8'},
+            'body': body,
+            'stream': None,
+            'content_type': 'application/json; charset=utf-8',
+        },
+    )()
+
+
+def _error_response(status: int, message: str, headers: dict[str, str] | None = None):
+    return _adapter_response(status, json.dumps({'error': {'message': message}}).encode('utf-8'), headers)
+
+
+def _ok_response(content: str = 'ok'):
+    return _adapter_response(200, json.dumps({'choices': [{'message': {'content': content}}]}).encode('utf-8'))
+
+
+class CooldownRelayTests(unittest.TestCase):
+    def _relay(self, factory, providers: list[str], health: dict[str, dict[str, object]] | None = None, hashes: dict[str, str] | None = None):
+        memory = _MemoryHealth(health)
+        key_hashes = dict(hashes or {})
+        relay = OpenAIRelay(
+            adapter_factory=factory,
+            health_loader=memory.load,
+            health_updater=memory.update,
+            health_ttl_seconds=600,
+            configured_providers_loader=lambda: list(providers),
+            key_hash_loader=lambda provider: key_hashes.get(provider, ''),
+        )
+        return relay, memory, key_hashes
+
+    def test_rate_limit_skips_provider_for_this_request_and_the_next_one(self) -> None:
+        calls: list[tuple[str, str]] = []
+        lists: list[str] = []
+        gemini_ok = {'ok': True}
+
+        def factory(provider: str):
+            class Adapter:
+                def forward_chat(self, payload: dict[str, object]):
+                    model = str(payload.get('model', ''))
+                    calls.append((provider, model))
+                    if provider == 'groq':
+                        return _error_response(429, 'rate limit')
+                    if gemini_ok['ok']:
+                        return _ok_response('from-gemini')
+                    return _error_response(500, 'server error')
+
+                def list_models(self) -> list[str]:
+                    lists.append(provider)
+                    return []
+
+            return Adapter()
+
+        relay, _memory, _hashes = self._relay(factory, ['groq', 'gemini'])
+        clock = _Clock(1_700_000_000)
+        with patch('python_scripts.openai_relay.time.sleep') as slept, patch('python_scripts.openai_relay.time.time', clock.time):
+            response = relay.handle_chat(_chat_request())
+            self.assertEqual(response.status, 200)
+            self.assertEqual(
+                calls,
+                [
+                    ('groq', 'llama-3.1-8b-instant'),
+                    ('gemini', 'gemini-3.1-flash-lite-preview'),
+                ],
+            )
+            self.assertEqual(lists, [])
+            slept.assert_not_called()
+
+            relay.handle_chat(_chat_request())
+            self.assertEqual([item for item in calls if item[0] == 'groq'], [('groq', 'llama-3.1-8b-instant')])
+
+            gemini_ok['ok'] = False
+            clock.now += 59
+            relay.handle_chat(_chat_request())
+            self.assertEqual([item for item in calls if item[0] == 'groq'], [('groq', 'llama-3.1-8b-instant')])
+
+            clock.now += 1
+            relay.handle_chat(_chat_request())
+            self.assertEqual([item for item in calls if item[0] == 'groq'], [('groq', 'llama-3.1-8b-instant'), ('groq', 'llama-3.1-8b-instant')])
+            self.assertNotIn('groq', lists)
+
+    def test_retry_after_controls_rate_limit_cooldown(self) -> None:
+        calls: list[tuple[str, str]] = []
+        lists: list[str] = []
+        gemini_ok = {'ok': True}
+
+        def factory(provider: str):
+            class Adapter:
+                def forward_chat(self, payload: dict[str, object]):
+                    model = str(payload.get('model', ''))
+                    calls.append((provider, model))
+                    if provider == 'groq':
+                        return _error_response(429, 'rate limit', {'Retry-After': '120', 'Content-Type': 'application/json'})
+                    if gemini_ok['ok']:
+                        return _ok_response()
+                    return _error_response(500, 'server error')
+
+                def list_models(self) -> list[str]:
+                    lists.append(provider)
+                    return []
+
+            return Adapter()
+
+        relay, _memory, _hashes = self._relay(factory, ['groq', 'gemini'])
+        clock = _Clock(1_700_000_000)
+
+        def groq_calls() -> list[tuple[str, str]]:
+            return [item for item in calls if item[0] == 'groq']
+
+        with patch('python_scripts.openai_relay.time.time', clock.time):
+            relay.handle_chat(_chat_request())
+            self.assertEqual(groq_calls(), [('groq', 'llama-3.1-8b-instant')])
+            gemini_ok['ok'] = False
+            clock.now += 90
+            relay.handle_chat(_chat_request())
+            self.assertEqual(groq_calls(), [('groq', 'llama-3.1-8b-instant')])
+            clock.now += 30
+            relay.handle_chat(_chat_request())
+            self.assertEqual(groq_calls(), [('groq', 'llama-3.1-8b-instant'), ('groq', 'llama-3.1-8b-instant')])
+            self.assertNotIn('groq', lists)
+
+    def test_quota_cooldown_lasts_six_hours(self) -> None:
+        calls: list[str] = []
+        lists: list[str] = []
+        gemini_ok = {'ok': True}
+
+        def factory(provider: str):
+            class Adapter:
+                def forward_chat(self, payload: dict[str, object]):
+                    calls.append(provider)
+                    if provider == 'groq':
+                        return _error_response(429, 'credits are depleted')
+                    if gemini_ok['ok']:
+                        return _ok_response()
+                    return _error_response(500, 'server error')
+
+                def list_models(self) -> list[str]:
+                    lists.append(provider)
+                    return []
+
+            return Adapter()
+
+        relay, _memory, _hashes = self._relay(factory, ['groq', 'gemini'])
+        clock = _Clock(1_700_000_000)
+        with patch('python_scripts.openai_relay.time.time', clock.time):
+            relay.handle_chat(_chat_request())
+            self.assertEqual(calls.count('groq'), 1)
+            clock.now += 61
+            relay.handle_chat(_chat_request())
+            self.assertEqual(calls.count('groq'), 1)
+            gemini_ok['ok'] = False
+            clock.now = 1_700_000_000 + QUOTA_COOLDOWN_SECONDS - 1
+            relay.handle_chat(_chat_request())
+            self.assertEqual(calls.count('groq'), 1)
+            clock.now += 1
+            relay.handle_chat(_chat_request())
+            self.assertEqual(calls.count('groq'), 2)
+            self.assertNotIn('groq', lists)
+
+    def test_auth_cooldown_follows_key_hash(self) -> None:
+        calls: list[str] = []
+        gemini_ok = {'ok': True}
+
+        def factory(provider: str):
+            class Adapter:
+                def forward_chat(self, payload: dict[str, object]):
+                    del payload
+                    calls.append(provider)
+                    if provider == 'groq':
+                        return _error_response(401, 'invalid api key')
+                    if gemini_ok['ok']:
+                        return _ok_response()
+                    return _error_response(500, 'server error')
+
+            return Adapter()
+
+        relay, _memory, hashes = self._relay(factory, ['groq', 'gemini'], hashes={'groq': 'hash-a'})
+        relay.handle_chat(_chat_request())
+        self.assertEqual(calls.count('groq'), 1)
+        self.assertIn('gemini', calls)
+        relay.handle_chat(_chat_request())
+        self.assertEqual(calls.count('groq'), 1)
+        gemini_ok['ok'] = False
+        relay.handle_chat(_chat_request())
+        self.assertEqual(calls.count('groq'), 1)
+        hashes['groq'] = 'hash-b'
+        relay.handle_chat(_chat_request())
+        self.assertEqual(calls.count('groq'), 2)
+
+    def test_server_error_skips_only_the_failed_model(self) -> None:
+        calls: list[tuple[str, str]] = []
+
+        def factory(provider: str):
+            class Adapter:
+                def forward_chat(self, payload: dict[str, object]):
+                    model = str(payload.get('model', ''))
+                    calls.append((provider, model))
+                    if (provider, model) == ('groq', 'llama-3.1-8b-instant'):
+                        return _error_response(500, 'server error')
+                    return _ok_response('other-model')
+
+            return Adapter()
+
+        relay, _memory, _hashes = self._relay(factory, ['groq'])
+        response = relay.handle_chat(_chat_request())
+        self.assertEqual(response.status, 200)
+        self.assertEqual(
+            calls[:2],
+            [
+                ('groq', 'llama-3.1-8b-instant'),
+                ('groq', 'llama-3.3-70b-versatile'),
+            ],
+        )
+
+    def test_all_cooled_candidates_return_502_without_upstream_calls(self) -> None:
+        calls: list[str] = []
+        now = 1_700_000_000
+        health = {
+            'groq/llama-3.1-8b-instant': {'scope': 'provider', 'category': 'quota', 'cooldown_until': now + 10},
+            'gemini/gemini-3.1-flash-lite-preview': {'scope': 'provider', 'category': 'quota', 'cooldown_until': now + 10},
+        }
+
+        def factory(provider: str):
+            class Adapter:
+                def forward_chat(self, payload: dict[str, object]):
+                    del payload
+                    calls.append(provider)
+                    return _ok_response()
+
+                def list_models(self) -> list[str]:
+                    calls.append(f'list:{provider}')
+                    return ['extra-model']
+
+            return Adapter()
+
+        relay, _memory, _hashes = self._relay(factory, ['groq', 'gemini'], health=health)
+        clock = _Clock(now)
+        with patch('python_scripts.openai_relay.time.time', clock.time):
+            response = relay.handle_chat(_chat_request())
+        self.assertEqual(calls, [])
+        self.assertEqual(response.status, 502)
+        payload = json.loads((response.body or b'{}').decode('utf-8'))
+        self.assertEqual(payload['error']['message'], 'all candidates failed')
+        self.assertEqual(payload['error']['code'], '502')
+
+    def test_success_body_does_not_add_fallback_fields(self) -> None:
+        def factory(provider: str):
+            class Adapter:
+                def forward_chat(self, payload: dict[str, object]):
+                    del payload
+                    return _ok_response('plain-ok')
+
+            return Adapter()
+
+        relay, _memory, _hashes = self._relay(factory, ['groq'])
+        with patch('python_scripts.openai_relay.time.sleep') as slept:
+            response = relay.handle_chat(_chat_request())
+            slept.assert_not_called()
+        body = json.loads((response.body or b'{}').decode('utf-8'))
+        self.assertEqual(set(body), {'id', 'object', 'created', 'model', 'choices', 'usage'})
+        self.assertEqual(body['choices'][0]['message']['content'], 'plain-ok')
+        self.assertNotIn(b'fallback', response.body or b'')
