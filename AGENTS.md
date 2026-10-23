@@ -1,12 +1,5 @@
 # AGENTS.md
 
-## 目标与原则（最小够用）
-
-- 只实现当前明确需求，拒绝过度设计（KISS / YAGNI）。
-- 优先可运行、可验证的改动；完成后直接收尾，不扩展无关任务。
-- 注释只解释 `Why`，不解释显而易见的 `What`。
-- 强制覆盖边界条件：空值、空数组、网络失败、上游异常。
-
 ## Python 版关键约定
 
 - `.env` 固定在项目根目录；不要读 home 目录配置。
@@ -36,21 +29,6 @@
   - `free_proxy/coding`
   - 统一返回 HTTP 400 + `code="model_deprecated"`，不做静默回退。
 
-## OpenClaw / Opencode 配置约定（长期有效）
-
-- OpenClaw 配置写入：
-  - 文件：`python_scripts/openclaw_config.py`
-  - provider id：`free-proxy`
-  - 写入模型：`auto`
-  - 若发现旧 `coding` 配置，只做迁移清理，不再写回。
-
-- Opencode 配置写入：
-  - 文件：`python_scripts/opencode_config.py`
-  - provider id：`free-proxy`
-  - 写入模型：`auto`
-  - 若发现旧 `coding` 配置，只做迁移清理，不再写回。
-  - 文档、示例、验证命令统一使用 `free-proxy/...`。
-
 ## Relay 主链路沉淀（长期有效）
 
 - `/v1/chat/completions` 的统一主链路固定为：
@@ -69,12 +47,7 @@
 - `auto` 候选池必须同时考虑：用户指定模型、health、provider hints、静态 fallback；provider `/models` 若不稳定，必须保留 hints 兜底。
 - provider 动态列出的候选模型应在该 provider 静态默认候选失败后再懒加载，并立即插入当前 provider 后续位置，不要等所有 provider 都失败后再尝试。
 
-## 本次 Longcat 接入沉淀（长期有效）
 
-- Longcat 走 OpenAI 兼容入口：`https://api.longcat.chat/openai`。
-- 新增 provider 时默认评估 `/models` 可用性；若不稳定，必须提供 `model_hints` 兜底，避免 UI 和验证流程卡死。
-- 前端不会回填真实 API key；只展示 `configured + masked` 状态（通过 `/api/provider-keys`）。
-- 若手工改 `.env` 后服务未重启，可能出现“状态与实际调用不一致”；优先重启后端再验证。
 
 ## UI / 验证链路沉淀（长期有效）
 
@@ -119,8 +92,6 @@
 - 执行计划属于过程文档，任务完成后应清理；结论沉淀到长期文档。
 - 用户文档必须优先覆盖三条真实使用路径：
   - OpenAI / Python SDK：`free-proxy/auto`
-  - OpenClaw：`free-proxy/auto`
-  - Opencode：`free-proxy/auto`
 
 ## 工具规范
 
