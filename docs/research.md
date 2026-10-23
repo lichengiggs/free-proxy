@@ -86,13 +86,18 @@
 - `free-proxy/auto` / `auto` / `free_proxy/auto`：按健康驱动候选池路由
 - `coding` / `free-proxy/coding` / `free_proxy/coding`：拒绝并返回 `model_deprecated`
 - `requested_model` 只作为内部路由偏好，不属于公开稳定接口
+- 冷却中的候选不会进入 `build_auto_candidates()`。转发循环在调用上游前再检查一次，同一次请求里刚写下的 provider 冷却会挡住已经生成的后续模型
+- `rate_limit`、`quota`、`auth` 按 provider 冷却。`server`、`network`、`model_not_found`、`unknown` 按 model 冷却。`token_limit` 不写入冷却
+- `rate_limit` 采用合法 `Retry-After`（秒数或 HTTP 日期，且不超过 15 分钟），否则 60 秒。`quota` 为 6 小时。`auth` 保持到该 provider 当前 key 的哈希变化
+- 冷却写在健康记录的 `cooldown_until` 上。转发路径不 `sleep`
+- 全部候选都在冷却中时，直接返回现有 502，不再补打冷却中的上游
 
 ## 5. 当前验证链路
 
 - provider key 保存后，通过 `verify_provider_key()` 先拉模型列表，再做真实 probe
 - probe 使用小输出预算，真实 chat 使用常规输出预算
 - token limit 错误会写入本地 `data/token-limits.json` 并自动重试一次
-- 健康状态会写入本地 `data/model-health.json`
+- 健康状态会写入本地 `data/model-health.json`，失败记录可以带 `category`、`scope`、`cooldown_until`，鉴权失败再带 key 哈希。文件不保存 API key 原文
 - 前端选中的模型偏好会写入本地 `data/preferred-model.json`
 - 这三个文件都是运行时状态，不入库
 - provider `/models` 不稳定时，路由仍需保留 `model_hints` 兜底

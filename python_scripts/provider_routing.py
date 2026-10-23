@@ -31,6 +31,46 @@ class CandidateTarget:
     rank: int
 
 
+def _cooldown_deadline(entry: dict[str, object]) -> int | None:
+    value = entry.get('cooldown_until')
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    return int(value)
+
+
+def cooldown_active(entry: dict[str, object], now_ts: int, current_key_hash: str | None = None) -> bool:
+    deadline = _cooldown_deadline(entry)
+    if deadline is None or deadline <= now_ts:
+        return False
+    if entry.get('category') == 'auth':
+        stored_hash = entry.get('key_hash')
+        current_hash = (current_key_hash or '').strip()
+        if isinstance(stored_hash, str) and stored_hash and current_hash and stored_hash != current_hash:
+            return False
+    return True
+
+
+def provider_cooldown_active(health: HealthState, provider: str, now_ts: int, current_key_hash: str | None = None) -> bool:
+    prefix = f'{provider}/'
+    for key, entry in health.items():
+        if not isinstance(key, str) or not key.startswith(prefix) or not isinstance(entry, dict):
+            continue
+        if entry.get('scope') != 'provider':
+            continue
+        if cooldown_active(entry, now_ts, current_key_hash):
+            return True
+    return False
+
+
+def candidate_in_cooldown(health: HealthState, provider: str, model: str, now_ts: int, current_key_hash: str | None = None) -> bool:
+    if provider_cooldown_active(health, provider, now_ts, current_key_hash):
+        return True
+    entry = health.get(f'{provider}/{model}')
+    if isinstance(entry, dict) and cooldown_active(entry, now_ts, current_key_hash):
+        return True
+    return False
+
+
 def _health_score(entry: dict[str, object], now_ts: int, ttl_seconds: int) -> int:
     checked_at_value = entry.get('checked_at')
     if not isinstance(checked_at_value, int):
@@ -115,13 +155,24 @@ def resolve_alias_candidates(
     return ordered
 
 
-def build_auto_candidates(*, requested_model: str | None, configured: list[str], health: HealthState, now_ts: int, ttl_seconds: int) -> list[CandidateTarget]:
+def build_auto_candidates(
+    *,
+    requested_model: str | None,
+    configured: list[str],
+    health: HealthState,
+    now_ts: int,
+    ttl_seconds: int,
+    key_hashes: dict[str, str] | None = None,
+) -> list[CandidateTarget]:
     ordered: list[CandidateTarget] = []
     seen: set[tuple[str, str]] = set()
+    hashes = key_hashes or {}
 
     def push(provider: str, model: str, source: CandidateSource) -> None:
         key = (provider, model)
         if provider not in configured or key in seen:
+            return
+        if candidate_in_cooldown(health, provider, model, now_ts, hashes.get(provider)):
             return
         seen.add(key)
         ordered.append(CandidateTarget(provider, model, source, len(ordered)))

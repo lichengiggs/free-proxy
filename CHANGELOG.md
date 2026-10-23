@@ -10,6 +10,7 @@
 - unified JSON/SSE response normalization
 
 ### Changed
+- skip cooled providers and models on `free-proxy/auto` instead of calling upstreams that already failed
 - route `/v1/chat/completions` through a unified relay pipeline instead of scattered service/server logic
 - lazily load provider-listed fallback models immediately after the failed static default for the same provider
 - migrate OpenCode and OpenClaw config output to `auto` only while cleaning legacy `coding` entries

@@ -5,10 +5,11 @@ import time
 from dataclasses import dataclass
 
 from .errors import classify_error
-from .fallback_policy import FallbackContext, decide_next_action
+from .fallback_policy import CooldownPlan, FallbackContext, decide_next_action, plan_cooldown
+from .provider_adapter import retry_after_from_headers
 from .provider_catalog import configured_provider_names, get_provider
 from .provider_errors import ProviderError
-from .provider_routing import CandidateTarget, build_auto_candidates
+from .provider_routing import CandidateTarget, build_auto_candidates, candidate_in_cooldown
 from .protocol_converter import gemini_json_to_openai_chat
 from .request_normalizer import ChatRequest, normalize_chat_request
 from .response_normalizer import RelayResponse, normalize_provider_response, sanitize_model_text
@@ -35,6 +36,7 @@ class RelayAttemptResult:
     status: int | None
     response: RelayResponse | None
     error: str | None
+    retry_after: str | None = None
 
 
 class OpenAIRelay:
@@ -47,6 +49,7 @@ class OpenAIRelay:
         preferred_model_loader=None,
         health_ttl_seconds: int,
         configured_providers_loader=configured_provider_names,
+        key_hash_loader=None,
     ) -> None:
         self.adapter_factory = adapter_factory
         self.health_loader = health_loader
@@ -54,6 +57,7 @@ class OpenAIRelay:
         self.preferred_model_loader = preferred_model_loader
         self.health_ttl_seconds = health_ttl_seconds
         self.configured_providers_loader = configured_providers_loader
+        self.key_hash_loader = key_hash_loader
 
     def normalize(self, payload: dict[str, object]) -> ChatRequest:
         return normalize_chat_request(payload)
@@ -205,10 +209,91 @@ class OpenAIRelay:
             )()
         return adapter_response
 
-    def _record_health(self, provider: str, model: str, ok: bool, reason: str | None = None) -> None:
+    def _key_hash(self, provider: str) -> str:
+        loader = self.key_hash_loader
+        if not callable(loader):
+            return ''
+        value = loader(provider)
+        return str(value).strip() if value else ''
+
+    def _record_health(self, provider: str, model: str, ok: bool, reason: str | None = None, **fields: object) -> None:
         if self.health_updater is None:
             return
-        self.health_updater(provider, model, ok, reason)
+        try:
+            self.health_updater(provider, model, ok, reason, **fields)
+        except TypeError:
+            self.health_updater(provider, model, ok, reason)
+
+    def _remember_attempt(
+        self,
+        live_health: dict[str, dict[str, object]],
+        provider: str,
+        model: str,
+        *,
+        ok: bool,
+        reason: str | None,
+        category: str | None,
+        now_ts: int,
+        retry_after: str | None,
+    ) -> CooldownPlan | None:
+        key = f'{provider}/{model}'
+        entry = dict(live_health.get(key, {})) if isinstance(live_health.get(key), dict) else {}
+        entry['ok'] = ok
+        entry['reason'] = reason
+        fields: dict[str, object] = {}
+        plan: CooldownPlan | None = None
+        if ok:
+            entry.pop('cooldown_until', None)
+            entry.pop('scope', None)
+            entry.pop('category', None)
+            entry.pop('key_hash', None)
+        else:
+            plan = plan_cooldown(
+                category=category or '',
+                now_ts=now_ts,
+                retry_after=retry_after,
+                ttl_seconds=self.health_ttl_seconds,
+            )
+            if category:
+                entry['category'] = category
+                fields['category'] = category
+            if plan is None:
+                entry.pop('cooldown_until', None)
+                entry.pop('scope', None)
+                entry.pop('key_hash', None)
+            else:
+                entry['category'] = plan.category
+                entry['scope'] = plan.scope
+                entry['cooldown_until'] = plan.cooldown_until
+                fields['category'] = plan.category
+                fields['scope'] = plan.scope
+                fields['cooldown_until'] = plan.cooldown_until
+                if plan.category == 'auth':
+                    key_hash = self._key_hash(provider)
+                    if key_hash:
+                        entry['key_hash'] = key_hash
+                        fields['key_hash'] = key_hash
+                    else:
+                        entry.pop('key_hash', None)
+                else:
+                    entry.pop('key_hash', None)
+        live_health[key] = entry
+        self._record_health(provider, model, ok, reason, **fields)
+        return plan
+
+    @staticmethod
+    def _retry_after_header(adapter_response: object) -> str | None:
+        direct = getattr(adapter_response, 'retry_after', None)
+        if isinstance(direct, str) and direct.strip():
+            return direct.strip()
+        headers = getattr(adapter_response, 'headers', None)
+        return retry_after_from_headers(headers if isinstance(headers, dict) else None)
+
+    def _stop_after_failure(self, decision_action: str, category: str | None) -> bool:
+        if decision_action != 'stop':
+            return False
+        # auth 的 stop 只结束当前 provider。冷却会挡住它剩下的模型。
+        return category != 'auth'
 
     def _append_provider_listed_candidate(self, candidates: list[CandidateTarget], provider: str, insert_at: int) -> list[CandidateTarget]:
         ordered = list(candidates)
@@ -268,12 +353,22 @@ class OpenAIRelay:
         if callable(self.preferred_model_loader):
             preferred_model = str(self.preferred_model_loader() or '').strip()
         requested_model = request.requested_model or (preferred_model if preferred_model else None)
+        configured = list(self.configured_providers_loader())
+        now_ts = int(time.time())
+        key_hashes = {provider: self._key_hash(provider) for provider in configured}
+        loaded = self.health_loader() or {}
+        live_health: dict[str, dict[str, object]] = {}
+        if isinstance(loaded, dict):
+            for key, value in loaded.items():
+                if isinstance(key, str) and isinstance(value, dict):
+                    live_health[key] = dict(value)
         candidates = build_auto_candidates(
             requested_model=requested_model,
-            configured=self.configured_providers_loader(),
-            health=self.health_loader(),
-            now_ts=int(time.time()),
+            configured=configured,
+            health=live_health,
+            now_ts=now_ts,
             ttl_seconds=self.health_ttl_seconds,
+            key_hashes=key_hashes,
         )
         same_provider_attempts = 0
         current_provider = ''
@@ -282,6 +377,9 @@ class OpenAIRelay:
         while index < len(candidates):
             candidate = candidates[index]
             index += 1
+            now_ts = int(time.time())
+            if candidate_in_cooldown(live_health, candidate.provider, candidate.model, now_ts, key_hashes.get(candidate.provider, '')):
+                continue
             if candidate.provider == current_provider:
                 same_provider_attempts += 1
             else:
@@ -291,13 +389,31 @@ class OpenAIRelay:
                 adapter_response = self._adapter_response(candidate.provider, candidate.model, request)
             except ProviderError as exc:
                 failure = classify_error(0, str(exc))
-                self._record_health(candidate.provider, candidate.model, False, failure.category)
+                self._remember_attempt(
+                    live_health,
+                    candidate.provider,
+                    candidate.model,
+                    ok=False,
+                    reason=failure.category,
+                    category=failure.category,
+                    now_ts=now_ts,
+                    retry_after=None,
+                )
                 decision = decide_next_action(FallbackContext(index, same_provider_attempts), RelayAttemptResult(False, candidate.provider, candidate.model, failure.category, None, None, str(exc)))
-                if decision.action == 'stop':
+                if self._stop_after_failure(decision.action, failure.category):
                     break
                 continue
             if adapter_response.status < 400:
-                self._record_health(candidate.provider, candidate.model, True, None)
+                self._remember_attempt(
+                    live_health,
+                    candidate.provider,
+                    candidate.model,
+                    ok=True,
+                    reason=None,
+                    category=None,
+                    now_ts=now_ts,
+                    retry_after=None,
+                )
                 if adapter_response.body is None:
                     return RelayResponse(200, {'Content-Type': 'application/json; charset=utf-8'}, b'', None)
                 return normalize_provider_response(
@@ -306,13 +422,27 @@ class OpenAIRelay:
                     body=adapter_response.body,
                     stream=request.stream,
                 )
+            retry_after = self._retry_after_header(adapter_response)
             failure = classify_error(adapter_response.status, (adapter_response.body or b'').decode('utf-8', errors='ignore'))
-            self._record_health(candidate.provider, candidate.model, False, failure.category)
-            if candidate.provider not in listed_loaded:
-                listed_loaded.add(candidate.provider)
-                candidates = self._append_provider_listed_candidate(candidates, candidate.provider, index)
-            decision = decide_next_action(FallbackContext(index, same_provider_attempts), RelayAttemptResult(False, candidate.provider, candidate.model, failure.category, adapter_response.status, None, failure.message))
-            if decision.action == 'stop':
+            plan = self._remember_attempt(
+                live_health,
+                candidate.provider,
+                candidate.model,
+                ok=False,
+                reason=failure.category,
+                category=failure.category,
+                now_ts=now_ts,
+                retry_after=retry_after,
+            )
+            if plan is None or plan.scope != 'provider':
+                if candidate.provider not in listed_loaded:
+                    listed_loaded.add(candidate.provider)
+                    candidates = self._append_provider_listed_candidate(candidates, candidate.provider, index)
+            decision = decide_next_action(
+                FallbackContext(index, same_provider_attempts),
+                RelayAttemptResult(False, candidate.provider, candidate.model, failure.category, adapter_response.status, None, failure.message, retry_after),
+            )
+            if self._stop_after_failure(decision.action, failure.category):
                 break
         error_body = json.dumps(
             {

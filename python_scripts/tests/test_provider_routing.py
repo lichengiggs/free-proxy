@@ -120,3 +120,111 @@ class ProviderRoutingTests(unittest.TestCase):
         self.assertEqual(candidates[1], 'model-ok')
         self.assertIn('hint-model', candidates)
         self.assertNotIn('model-old', candidates)
+
+    def test_build_auto_candidates_skips_models_inside_cooldown(self) -> None:
+        now = 1_000
+        health = {
+            'groq/llama-3.1-8b-instant': {'scope': 'model', 'category': 'server', 'cooldown_until': now + 30},
+            'groq/llama-3.3-70b-versatile': {'scope': 'model', 'category': 'server', 'cooldown_until': now + 30},
+        }
+        items = build_auto_candidates(
+            requested_model=None,
+            configured=['groq', 'gemini'],
+            health=health,
+            now_ts=now,
+            ttl_seconds=600,
+        )
+        providers = {item.provider for item in items}
+        self.assertNotIn('groq', providers)
+        self.assertIn('gemini', providers)
+
+    def test_build_auto_candidates_returns_model_when_cooldown_reaches_now(self) -> None:
+        now = 1_000
+        health = {
+            'groq/llama-3.1-8b-instant': {'scope': 'model', 'category': 'server', 'cooldown_until': now},
+        }
+        items = build_auto_candidates(
+            requested_model=None,
+            configured=['groq'],
+            health=health,
+            now_ts=now,
+            ttl_seconds=600,
+        )
+        self.assertIn('llama-3.1-8b-instant', [item.model for item in items])
+
+    def test_provider_cooldown_removes_every_hint_from_one_record(self) -> None:
+        now = 1_000
+        health = {
+            'groq/llama-3.1-8b-instant': {'scope': 'provider', 'category': 'rate_limit', 'cooldown_until': now + 60},
+        }
+        items = build_auto_candidates(
+            requested_model=None,
+            configured=['groq', 'gemini'],
+            health=health,
+            now_ts=now,
+            ttl_seconds=600,
+        )
+        pairs = [(item.provider, item.model) for item in items]
+        self.assertNotIn(('groq', 'llama-3.1-8b-instant'), pairs)
+        self.assertNotIn(('groq', 'llama-3.3-70b-versatile'), pairs)
+        self.assertIn(('gemini', 'gemini-3.1-flash-lite-preview'), pairs)
+
+    def test_cooled_preferred_model_yields_to_another_provider(self) -> None:
+        now = 1_000
+        health = {
+            'groq/llama-3.1-8b-instant': {'scope': 'provider', 'category': 'quota', 'cooldown_until': now + 60},
+        }
+        items = build_auto_candidates(
+            requested_model='groq/llama-3.1-8b-instant',
+            configured=['groq', 'gemini'],
+            health=health,
+            now_ts=now,
+            ttl_seconds=600,
+        )
+        self.assertTrue(items)
+        self.assertEqual(items[0].provider, 'gemini')
+        self.assertTrue(all(item.provider != 'groq' for item in items))
+
+    def test_build_auto_candidates_is_empty_when_every_candidate_is_cooling(self) -> None:
+        now = 1_000
+        health = {
+            'groq/llama-3.1-8b-instant': {'scope': 'provider', 'category': 'rate_limit', 'cooldown_until': now + 5},
+            'gemini/gemini-3.1-flash-lite-preview': {'scope': 'provider', 'category': 'quota', 'cooldown_until': now + 5},
+        }
+        items = build_auto_candidates(
+            requested_model='groq/llama-3.1-8b-instant',
+            configured=['groq', 'gemini'],
+            health=health,
+            now_ts=now,
+            ttl_seconds=600,
+        )
+        self.assertEqual(items, [])
+
+    def test_auth_cooldown_lifts_when_provider_key_hash_changes(self) -> None:
+        now = 1_000
+        health = {
+            'groq/llama-3.1-8b-instant': {
+                'scope': 'provider',
+                'category': 'auth',
+                'cooldown_until': now + 10**7,
+                'key_hash': 'old-hash',
+            },
+        }
+        blocked = build_auto_candidates(
+            requested_model=None,
+            configured=['groq', 'gemini'],
+            health=health,
+            now_ts=now,
+            ttl_seconds=600,
+            key_hashes={'groq': 'old-hash'},
+        )
+        self.assertTrue(all(item.provider != 'groq' for item in blocked))
+        released = build_auto_candidates(
+            requested_model=None,
+            configured=['groq', 'gemini'],
+            health=health,
+            now_ts=now,
+            ttl_seconds=600,
+            key_hashes={'groq': 'new-hash'},
+        )
+        self.assertEqual(released[0].provider, 'groq')
