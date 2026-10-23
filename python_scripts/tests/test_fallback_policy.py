@@ -33,6 +33,13 @@ class FallbackPolicyTests(unittest.TestCase):
         decision = decide_next_action(context, RelayAttemptResult(False, 'network'))
         self.assertEqual(decision.action, 'next_candidate')
 
+    def test_unknown_error_moves_to_next_candidate(self) -> None:
+        # unknown（如上游返回 Unsupported parameter 400）不应终止整条链路，
+        # 应视为当前 Provider 不兼容，跳到下一个候选。
+        context = FallbackContext(attempt_count=1, same_provider_attempts=0)
+        decision = decide_next_action(context, RelayAttemptResult(False, 'unknown'))
+        self.assertEqual(decision.action, 'next_candidate')
+
     def test_retry_same_provider_when_under_limit(self) -> None:
         context = FallbackContext(attempt_count=1, same_provider_attempts=1)
         decision = decide_next_action(context, RelayAttemptResult(False, 'token_limit'))

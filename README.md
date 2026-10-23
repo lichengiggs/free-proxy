@@ -16,7 +16,7 @@
 - 一个稳定模型别名：`free-proxy/auto`
 - 多 provider 自动回退，某家失败时可切到其他可用模型
 - 本地 Web 页面配置 API Key，不用手改复杂配置
-- 常见可用额度选项：Longcat 一般最省心，Gemini / Mistral / GitHub Models / SambaNova 可做备选
+- 常见可用额度选项：Gemini / Mistral / GitHub Models / SambaNova
 
 ## 当前稳定接口
 
@@ -64,12 +64,11 @@ uv run free-proxy serve
 
 ## 推荐怎么选
 
-如果你只想先用起来，优先配 Longcat。
+先保存任意一家有免费额度的 provider，再用 `free-proxy/auto`。
 
 | Provider | 推荐模型 | 适合场景 | 说明 |
 |---|---|---|---|
-| Longcat | `LongCat-Flash-Lite` | 默认首选 | 当前最省心，免费额度大 |
-| Gemini | `gemini-3.1-flash-lite-preview` | Longcat 备用 | 免费层稳定，适合回退 |
+| Gemini | `gemini-3.1-flash-lite-preview` | 免费层回退 | 免费层稳定，适合回退 |
 | Mistral | `mistral-large-latest` | 稳定后备 | 质量稳，适合补位 |
 | GitHub Models | `gpt-4o` / `gpt-4o-mini` | 已有 Copilot 的用户 | 质量高，但额度取决于账号 |
 | SambaNova | `DeepSeek-V3.1-Terminus` | 补充选择 | 适合作为额外后备 |

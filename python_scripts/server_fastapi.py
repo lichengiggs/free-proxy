@@ -421,11 +421,7 @@ async def openai_chat_completions(request: Request):
     payload, error_response = await _read_json_payload(request, openai=True)
     if error_response is not None:
         return error_response
-    user_agent = request.headers.get('User-Agent', '')
-    client_hint = 'opencode' if 'opencode' in user_agent.lower() else 'openclaw' if 'openclaw' in user_agent.lower() else ''
     try:
-        payload = dict(payload)
-        payload['client_hint'] = client_hint
         svc = get_service()
         relay = svc.openai_relay()
         req = relay.normalize(payload)

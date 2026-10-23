@@ -11,7 +11,7 @@ from python_scripts.errors import classify_error
 from python_scripts.provider_adapter import ProviderAdapter
 from python_scripts.provider_catalog import get_provider, list_providers
 from python_scripts.provider_errors import ProviderError
-from python_scripts.provider_transport import UrlLibTransport, build_url
+from python_scripts.provider_transport import HttpxTransport, UrlLibTransport, build_url
 
 
 class FakeTransport:
@@ -29,23 +29,6 @@ class FakeTransport:
     ) -> tuple[int, dict[str, str], bytes]:
         self.requests.append((method, url, headers, body, timeout))
         return self.responses[(method, url)]
-
-
-class TimeoutTransport:
-    def __init__(self) -> None:
-        self.timeouts: list[int] = []
-
-    def request(
-        self,
-        method: str,
-        url: str,
-        headers: dict[str, str] | None = None,
-        body: bytes | None = None,
-        timeout: int = 30,
-    ) -> tuple[int, dict[str, str], bytes]:
-        del method, url, headers, body
-        self.timeouts.append(timeout)
-        raise TimeoutError('The read operation timed out')
 
 
 class StreamingTransport:
@@ -73,6 +56,12 @@ class StreamingTransport:
 
 
 class ClientTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls) -> None:
+        super().setUpClass()
+        # 预热：SSL 证书上下文是进程级一次性成本（Windows 上加载约 1.7s），与 SSE 早停延迟无关
+        HttpxTransport._verify_value()
+
     def test_build_url_handles_slashes_and_query(self) -> None:
         self.assertEqual(
             build_url('https://openrouter.ai/api/v1/', '/chat/completions'),
@@ -101,7 +90,8 @@ class ClientTests(unittest.TestCase):
         fake_response.headers.items.return_value = [('content-type', 'application/json')]
         fake_response.read.return_value = b'{}'
 
-        with patch('python_scripts.provider_transport.certifi.where', return_value='/tmp/test-cert.pem') as where_mock, \
+        with patch.object(HttpxTransport, '_verify_context', None), \
+             patch('python_scripts.provider_transport.certifi.where', return_value='/tmp/test-cert.pem') as where_mock, \
              patch('python_scripts.provider_transport.ssl.create_default_context', return_value='ssl-context') as context_mock, \
              patch('python_scripts.provider_transport.urlopen', return_value=fake_response) as urlopen_mock:
             transport = UrlLibTransport()
@@ -115,7 +105,8 @@ class ClientTests(unittest.TestCase):
         self.assertEqual(urlopen_mock.call_args.kwargs['context'], 'ssl-context')
 
     def test_urllib_transport_converts_timeout_to_provider_error(self) -> None:
-        with patch('python_scripts.provider_transport.certifi.where', return_value='/tmp/test-cert.pem'), \
+        with patch.object(HttpxTransport, '_verify_context', None), \
+             patch('python_scripts.provider_transport.certifi.where', return_value='/tmp/test-cert.pem'), \
              patch('python_scripts.provider_transport.ssl.create_default_context', return_value='ssl-context'), \
              patch('python_scripts.provider_transport.urlopen', side_effect=TimeoutError('The read operation timed out')):
             transport = UrlLibTransport()
@@ -307,17 +298,17 @@ class ClientTests(unittest.TestCase):
         with self.assertRaises(ProviderError):
             adapter.chat_text('a', 'ok')
 
-    def test_longcat_thinking_uses_reasoning_content_when_content_is_missing(self) -> None:
-        provider = get_provider('longcat')
+    def test_chat_text_uses_reasoning_content_when_content_is_missing(self) -> None:
+        provider = get_provider('groq')
         transport = FakeTransport({
-            ('POST', 'https://api.longcat.chat/openai/chat/completions'): (
+            ('POST', 'https://api.groq.com/openai/v1/chat/completions'): (
                 200,
                 {},
                 json.dumps({'choices': [{'message': {'role': 'assistant', 'reasoning_content': 'ok'}}]}).encode(),
             ),
         })
         adapter = ProviderAdapter(provider=provider, api_key='x', transport=transport)
-        self.assertEqual(adapter.chat_text('LongCat-Flash-Thinking-2601', 'ok'), 'ok')
+        self.assertEqual(adapter.chat_text('llama-3.1-8b-instant', 'ok'), 'ok')
 
     def test_openrouter_only_keeps_free_or_zero_cost_models(self) -> None:
         provider = get_provider('openrouter')
@@ -358,19 +349,6 @@ class ClientTests(unittest.TestCase):
         adapter = ProviderAdapter(provider=provider, api_key='x', transport=transport)
         self.assertEqual(adapter.list_models(), ['llama-3.1-8b-instant', 'llama-3.3-70b-versatile'])
         self.assertEqual(adapter.chat_text('llama-3.1-8b-instant', 'ok'), 'ok')
-
-    def test_longcat_model_hint_fallback_on_list_error(self) -> None:
-        provider = get_provider('longcat')
-        transport = FakeTransport({
-            ('GET', 'https://api.longcat.chat/openai/models'): (404, {}, json.dumps({'error': {'message': 'not found'}}).encode()),
-            ('POST', 'https://api.longcat.chat/openai/chat/completions'): (200, {}, json.dumps({'choices': [{'message': {'content': 'ok'}}]}).encode()),
-        })
-        adapter = ProviderAdapter(provider=provider, api_key='x', transport=transport)
-        self.assertEqual(
-            adapter.list_models(),
-            ['LongCat-Flash-Lite', 'LongCat-Flash-Chat', 'LongCat-Flash-Thinking', 'LongCat-Flash-Thinking-2601'],
-        )
-        self.assertEqual(adapter.chat_text('LongCat-Flash-Chat', 'ok'), 'ok')
 
     def test_ofox_only_keeps_free_suffix_models(self) -> None:
         provider = get_provider('ofox')
@@ -443,16 +421,8 @@ class ClientTests(unittest.TestCase):
         adapter = ProviderAdapter(provider=provider, api_key='x', transport=transport)
         self.assertEqual(adapter.list_models(), ['gemini-3.1-flash-lite-preview'])
 
-    def test_longcat_thinking_uses_longer_timeout(self) -> None:
-        provider = get_provider('longcat')
-        transport = TimeoutTransport()
-        adapter = ProviderAdapter(provider=provider, api_key='x', transport=transport, request_timeout_seconds=12)
-        with self.assertRaises(ProviderError):
-            adapter.chat_text('LongCat-Flash-Thinking-2601', 'ok')
-        self.assertEqual(transport.timeouts[-1], 240)
-
-    def test_longcat_thinking_chat_stream_keeps_reasoning_and_content_chunks(self) -> None:
-        provider = get_provider('longcat')
+    def test_chat_stream_keeps_reasoning_and_content_chunks(self) -> None:
+        provider = get_provider('groq')
 
         class StreamTransport(StreamingTransport):
             def stream_request(
@@ -473,7 +443,7 @@ class ClientTests(unittest.TestCase):
         transport = StreamTransport()
         adapter = ProviderAdapter(provider=provider, api_key='x', transport=transport)
         status, headers, chunks = adapter.chat_completions_stream({
-            'model': 'LongCat-Flash-Thinking-2601',
+            'model': 'llama-3.1-8b-instant',
             'messages': [{'role': 'user', 'content': 'hello'}],
             'stream': True,
         })

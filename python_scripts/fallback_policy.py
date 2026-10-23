@@ -36,4 +36,6 @@ def decide_next_action(context: FallbackContext, attempt) -> FallbackDecision:
         return FallbackDecision('next_candidate', 0.5 * (context.backoff_multiplier ** context.attempt_count))
     if attempt.category in {'quota', 'model_not_found', 'network', 'server'}:
         return FallbackDecision('next_candidate')
-    return FallbackDecision('stop')
+    # 未知分类（如上游返回 Unsupported parameter 400）不应终止整条链路：
+    # 视为当前 Provider 不兼容，跳到下一个候选。总尝试次数由 max_total_attempts 兜底。
+    return FallbackDecision('next_candidate')

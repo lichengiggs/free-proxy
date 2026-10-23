@@ -36,7 +36,7 @@ class FakeService:
     def provider_key_statuses(self) -> dict[str, dict[str, object]]:
         return {
             'openrouter': {'configured': True, 'masked': 'sk-o***1234', 'env': 'OPENROUTER_API_KEY'},
-            'longcat': {'configured': False, 'masked': '', 'env': 'LONGCAT_API_KEY'},
+            'groq': {'configured': False, 'masked': '', 'env': 'GROQ_API_KEY'},
         }
 
     def available_providers(self) -> list[str]:

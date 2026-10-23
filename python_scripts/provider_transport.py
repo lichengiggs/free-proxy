@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import ssl
+import threading
 from collections.abc import Iterable
 from typing import Protocol
 from urllib.error import HTTPError, URLError
@@ -48,6 +49,8 @@ def build_url(base_url: str, path: str, query: dict[str, str] | None = None) -> 
 
 class HttpxTransport:
     _retryable_statuses = {429, 500, 502, 503, 504}
+    _verify_context: ssl.SSLContext | None = None
+    _verify_lock = threading.Lock()
 
     @staticmethod
     def _headers_map(headers: httpx.Headers) -> dict[str, str]:
@@ -65,15 +68,23 @@ class HttpxTransport:
 
     @staticmethod
     def _verify_value() -> object:
-        ssl_context = ssl.create_default_context(cafile=certifi.where())
-        if not isinstance(ssl_context, ssl.SSLContext):
+        # SSL 上下文可复用；在 Windows 上加载 ca 证书约 1.7s，进程内只建一次
+        cached = HttpxTransport._verify_context
+        if cached is not None:
+            return cached
+        with HttpxTransport._verify_lock:
+            if HttpxTransport._verify_context is not None:
+                return HttpxTransport._verify_context
+            ssl_context = ssl.create_default_context(cafile=certifi.where())
+            if not isinstance(ssl_context, ssl.SSLContext):
+                return ssl_context
+            cert_path = certifi.where()
+            try:
+                ssl_context.load_verify_locations(cafile=cert_path)
+            except FileNotFoundError:
+                pass
+            HttpxTransport._verify_context = ssl_context
             return ssl_context
-        cert_path = certifi.where()
-        try:
-            ssl_context.load_verify_locations(cafile=cert_path)
-        except FileNotFoundError:
-            pass
-        return ssl_context
 
     @classmethod
     def _is_retryable_status(cls, status: int) -> bool:

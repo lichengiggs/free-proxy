@@ -115,11 +115,11 @@ class ProviderAdapter:
     def list_models(self) -> list[str]:
         status, _, data = self._request_json('GET', '/models', query=get_provider_required_query(self.provider.name))
         if status >= 400:
-            if self.provider.name in {'github', 'groq', 'longcat', 'nvidia', 'ofox'}:
+            if self.provider.name in {'github', 'groq', 'nvidia', 'ofox'}:
                 return get_provider_model_hints(self.provider.name)
             self._raise_http_error(status, data, '获取模型失败')
 
-        if self.provider.name in {'github', 'groq', 'longcat', 'nvidia', 'ofox'} and not self._has_model_items(data):
+        if self.provider.name in {'github', 'groq', 'nvidia', 'ofox'} and not self._has_model_items(data):
             return get_provider_model_hints(self.provider.name)
 
         items = self._extract_model_items(data)

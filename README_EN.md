@@ -16,7 +16,7 @@ This project is best for:
 - One stable model alias: `free-proxy/auto`
 - Automatic provider fallback when one model fails
 - A local web page for API key setup, so you do not need to edit config files by hand
-- Typical quota-friendly options: Longcat is usually the easiest start, with Gemini / Mistral / GitHub Models / SambaNova as backups
+- Typical quota-friendly options: Gemini / Mistral / GitHub Models / SambaNova
 
 ## Stable public surface
 
@@ -64,11 +64,10 @@ Beginner tip: keep the terminal window open while the service is running.
 
 ## Which model to choose
 
-If you only want the fastest path, start with Longcat.
+Save any provider key with free quota, then use `free-proxy/auto`.
 
 | Provider | Recommended model | Best for | Notes |
 |---|---|---|---|
-| Longcat | `LongCat-Flash-Lite` | default first choice | easiest starting point, large free quota |
 | Gemini | `gemini-3.1-flash-lite-preview` | backup option | stable free tier fallback |
 | Mistral | `mistral-large-latest` | stable backup | strong fallback quality |
 | GitHub Models | `gpt-4o` / `gpt-4o-mini` | users with Copilot access | quality is high, quota depends on account |
