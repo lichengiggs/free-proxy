@@ -11,6 +11,8 @@ rate-limit-state.json
 __pycache__/
 *.pyc
 .worktrees/
+# local agent pipeline runtime: state, locks, verdicts, prompts, logs
+.agent-pipeline/
 # runtime state
 data/model-health.json
 data/token-limits.json
