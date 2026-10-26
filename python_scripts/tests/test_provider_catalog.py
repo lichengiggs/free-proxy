@@ -22,6 +22,20 @@ class ProviderCatalogTests(unittest.TestCase):
         self.assertEqual(provider.base_url, 'https://api.ofox.ai/v1')
         self.assertEqual(provider.api_key_env, 'OFOX_API_KEY')
 
+    def test_get_provider_returns_amd_catalog_item(self) -> None:
+        provider = get_provider('amd')
+        self.assertEqual(provider.name, 'amd')
+        self.assertEqual(provider.base_url, 'https://developer.amd.com.cn/radeon/api/v1')
+        self.assertEqual(provider.api_key_env, 'AMD_API_KEY')
+        self.assertEqual(provider.format, 'openai')
+        self.assertEqual(provider.model_hints, ('DeepSeek-V4-Flash', 'MiniCPM5-2B'))
+        self.assertEqual(PROVIDERS[-1].name, 'amd')
+
+    def test_amd_api_key_configures_amd(self) -> None:
+        self.assertEqual(configured_provider_names({'AMD_API_KEY': 'test-key'}), ['amd'])
+        self.assertNotIn('amd', configured_provider_names({}))
+        self.assertNotIn('amd', configured_provider_names({'AMD_TOKEN': 'test-key'}))
+
     def test_list_providers_keeps_declared_order(self) -> None:
         names = [item.name for item in list_providers()]
         self.assertEqual(names, [item.name for item in PROVIDERS])

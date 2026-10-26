@@ -77,6 +77,13 @@ PROVIDERS: tuple[ProviderMeta, ...] = (
         'openai',
         model_hints=('meta/llama-3.1-70b-instruct',),
     ),
+    ProviderMeta(
+        'amd',
+        'https://developer.amd.com.cn/radeon/api/v1',
+        'AMD_API_KEY',
+        'openai',
+        model_hints=('DeepSeek-V4-Flash', 'MiniCPM5-2B'),
+    ),
 )
 
 PROVIDER_MAP: dict[str, ProviderMeta] = {provider.name: provider for provider in PROVIDERS}
