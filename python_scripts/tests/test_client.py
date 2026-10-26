@@ -484,6 +484,36 @@ class ClientTests(unittest.TestCase):
         self.assertEqual(adapter.list_models(), ['meta/llama-3.1-70b-instruct'])
         self.assertEqual(adapter.chat_text('meta/llama-3.1-70b-instruct', 'ok'), 'ok')
 
+    def test_amd_model_hint_fallback_on_list_error(self) -> None:
+        provider = get_provider('amd')
+        transport = FakeTransport({
+            ('GET', 'https://developer.amd.com.cn/radeon/api/v1/models'): (404, {}, b'not found'),
+        })
+        adapter = ProviderAdapter(provider=provider, api_key='test-key', transport=transport)
+        self.assertEqual(adapter.list_models(), ['DeepSeek-V4-Flash', 'MiniCPM5-2B'])
+
+    def test_amd_drops_non_chat_ids_and_keeps_priced_chat_models(self) -> None:
+        provider = get_provider('amd')
+        transport = FakeTransport({
+            ('GET', 'https://developer.amd.com.cn/radeon/api/v1/models'): (
+                200,
+                {},
+                json.dumps({
+                    'data': [
+                        {'id': 'DeepSeek-V4-Flash'},
+                        {'id': 'OmniVoice'},
+                        {'id': 'MinerU2.5-Pro'},
+                        {'id': 'Clef'},
+                        {'id': 'd3'},
+                        {'id': 'd3-flash'},
+                        {'id': 'Qwen3-32B', 'pricing': {'prompt': '2', 'completion': '3'}},
+                    ]
+                }).encode(),
+            ),
+        })
+        adapter = ProviderAdapter(provider=provider, api_key='test-key', transport=transport)
+        self.assertEqual(adapter.list_models(), ['DeepSeek-V4-Flash', 'Qwen3-32B'])
+
     def test_chat_completions_raw_only_allows_openai_format(self) -> None:
         provider = get_provider('gemini')
         adapter = ProviderAdapter(provider=provider, api_key='x', transport=FakeTransport({}))

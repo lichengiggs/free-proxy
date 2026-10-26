@@ -13,6 +13,8 @@ from .response_normalizer import sanitize_model_text
 from .request_limiter import RequestLimiterGate
 
 JsonObject = dict[str, object]
+_HINT_FALLBACK_PROVIDERS = frozenset({'github', 'groq', 'nvidia', 'ofox', 'amd'})
+_AMD_NON_CHAT_MODEL_IDS = frozenset({'MinerU2.5-Pro', 'OmniVoice', 'Clef', 'd3', 'd3-flash'})
 
 
 @dataclass(frozen=True)
@@ -127,11 +129,11 @@ class ProviderAdapter:
     def list_models(self) -> list[str]:
         status, _, data = self._request_json('GET', '/models', query=get_provider_required_query(self.provider.name))
         if status >= 400:
-            if self.provider.name in {'github', 'groq', 'nvidia', 'ofox'}:
+            if self.provider.name in _HINT_FALLBACK_PROVIDERS:
                 return get_provider_model_hints(self.provider.name)
             self._raise_http_error(status, data, '获取模型失败')
 
-        if self.provider.name in {'github', 'groq', 'nvidia', 'ofox'} and not self._has_model_items(data):
+        if self.provider.name in _HINT_FALLBACK_PROVIDERS and not self._has_model_items(data):
             return get_provider_model_hints(self.provider.name)
 
         items = self._extract_model_items(data)
@@ -145,6 +147,8 @@ class ProviderAdapter:
             if self.provider.name == 'ofox' and not raw_model_id.endswith(':free'):
                 continue
             if self.provider.name == 'gemini' and not self._is_supported_gemini_text_model(item, raw_model_id):
+                continue
+            if self.provider.name == 'amd' and raw_model_id in _AMD_NON_CHAT_MODEL_IDS:
                 continue
             ids.append(self.normalize_model_id(raw_model_id))
         if ids:

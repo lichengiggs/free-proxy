@@ -16,7 +16,7 @@
 - 一个稳定模型别名：`free-proxy/auto`
 - 多 provider 自动回退，某家失败时可切到其他可用模型
 - 本地 Web 页面配置 API Key，不用手改复杂配置
-- 控制台可配置的 provider：OpenRouter / Groq / Ofox / Gemini / GitHub Models / Mistral / SambaNova / NVIDIA NIM
+- 控制台可配置的 provider：OpenRouter / Groq / Ofox / Gemini / GitHub Models / Mistral / SambaNova / NVIDIA NIM / AMD Token Factory
 
 ## 当前稳定接口
 
@@ -76,6 +76,7 @@ uv run free-proxy serve
 | GitHub Models | `gpt-4o` / `gpt-4o-mini` | 已有 Copilot 的用户 | 质量高，但额度取决于账号 |
 | SambaNova | `DeepSeek-V3.1-Terminus` | 补充选择 | 适合作为额外后备 |
 | NVIDIA NIM | `meta/llama-3.1-70b-instruct` | 补充选择 | 当前内置推荐是这一条 |
+| AMD Token Factory | `DeepSeek-V4-Flash` | 补充选择 | 免费额度里的补充选择 |
 
 如果你只记一条：
 
