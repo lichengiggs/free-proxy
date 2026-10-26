@@ -2,20 +2,20 @@
 
 这是个人仓库用的本地脚手架，不改变 free-proxy 的运行行为。
 
-人只做一件事：写好 GitHub Issue，加上标签 `agent:fix`。之后由这台 Mac 上的脚本调用本地编码 CLI（`opencode` 或 `agent -p`）和 `gh`，完成实现、开 PR、审查、合并。
+人只做一件事：写好 GitHub Issue，加上标签 `ready`。之后由这台 Mac 上的脚本调用本地编码 CLI（`opencode` 或 `agent -p`）和 `gh`，完成实现、开 PR、审查、合并。
 
 审查者给出 `ACCEPT`，并且约定检查是绿的，脚本就 squash 合并、关闭 Issue、删除分支。自动合并有风险，这个仓库的主人接受这个风险。
 
 本阶段不做 Cloud Agent、GitHub Actions，也不做公网 webhook。编排方式是本机前台轮询。
 
-仓库里已有标签 `ready`（可以由 agent 接管开发的 issues）。这套脚本不读它。唯一触发标签是 `agent:fix`。
+触发标签是仓库里现成的 `ready`（可以由agent接管开发的issues）。正文写完再打上它。
 
 ## 阶段
 
 ```text
 人写好 Goal / Acceptance / Only-edit
         |
-        |  打上标签 agent:fix
+        |  打上标签 ready
         v
 scripts/agent-poll.sh          本机前台循环，不需要 webhook
         |
@@ -44,12 +44,12 @@ scripts/agent-poll.sh          本机前台循环，不需要 webhook
 
 ## Issue 约定
 
-标签只需创建一次：
+这个仓库已经有 `ready`。fork 里如果缺这个标签，按原样补上：
 
 ```bash
-gh label create agent:fix \
-  --description "Local agent pipeline may implement this issue" \
-  --color 1D76DB
+gh label create ready \
+  --description "可以由agent接管开发的issues" \
+  --color 9d88c3
 ```
 
 Issue 必须是打开状态，并且包含这三个标题，大小写和连字符都要一致：
@@ -69,7 +69,7 @@ Issue 必须是打开状态，并且包含这三个标题，大小写和连字�
 
 如果 `Only-edit` 里没有像路径的行，脚本不去猜。审查者根据那段说明判断范围。
 
-正文模板在 [`.github/ISSUE_TEMPLATE/agent-fix.md`](../.github/ISSUE_TEMPLATE/agent-fix.md)。模板不会自动加上 `agent:fix`。正文写完再打标签。
+正文模板在 [`.github/ISSUE_TEMPLATE/agent-fix.md`](../.github/ISSUE_TEMPLATE/agent-fix.md)。模板不会自动加上 `ready`。正文写完再打这个标签。
 
 ## ACCEPT、REJECT、FIX
 
@@ -107,7 +107,7 @@ GitHub checks 还在跑时，后续轮询继续等（默认 10 轮）。head SHA
 
 两轮修复后停止的例子：
 
-1. Issue `#12` 打上 `agent:fix`。轮询启动实现者 A，分支 `agent/fix-12`，打开 PR `#40`。`fix_rounds=0`。
+1. Issue `#12` 打上 `ready`。轮询启动实现者 A，分支 `agent/fix-12`，打开 PR `#40`。`fix_rounds=0`。
 2. 审查者 B 在新进程里给出 `FIX`。`fix_rounds=1`。
 3. 实现者 A 再次在 `agent/fix-12` 上修改，并推到 PR `#40`。
 4. 审查者 B 再次 `FIX`。`fix_rounds=2`。

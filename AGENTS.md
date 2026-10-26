@@ -98,7 +98,7 @@
 
 - 这是仓库脚手架，不改变代理运行时。
 - 约定、阶段和干跑：`docs/agent-pipeline.md`
-- 人开 Issue 并打上 `agent:fix` 之后才进入流水线。实现与审查必须分进程。
+- 人开 Issue 并打上 `ready` 之后才进入流水线。实现与审查必须分进程。
 - 脚本：`scripts/agent-implement.sh`、`scripts/agent-review.sh`、`scripts/agent-poll.sh`
 
 ## 工具规范

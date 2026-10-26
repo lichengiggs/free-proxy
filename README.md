@@ -180,7 +180,7 @@ print(resp.choices[0].message.content)
 
 ## 本地 agent 流水线
 
-这是仓库里的本机脚本，不改变 free-proxy 的运行行为。人只负责开一个写好的 GitHub Issue，并打上 `agent:fix`。之后由本机轮询脚本调用编码 agent 和 `gh`：实现者开 PR，另一个进程里的审查者给出 `ACCEPT` 或 `REJECT`，`ACCEPT` 且检查通过后自动 squash 合并。
+这是仓库里的本机脚本，不改变 free-proxy 的运行行为。人只负责开一个写好的 GitHub Issue，并打上现成的 `ready` 标签。之后由本机轮询脚本调用编码 agent 和 `gh`：实现者开 PR，另一个进程里的审查者给出 `ACCEPT` 或 `REJECT`，`ACCEPT` 且检查通过后自动 squash 合并。
 
 怎么跑、边界、以及干跑步骤见 [docs/agent-pipeline.md](docs/agent-pipeline.md)。这一阶段不包含 Cloud Agent，也不包含 GitHub Actions。
 

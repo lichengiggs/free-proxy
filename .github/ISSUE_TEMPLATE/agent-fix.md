@@ -1,6 +1,6 @@
 ---
 name: Agent fix
-about: 交给本地 agent 流水线的一次有边界改动。正文写完后，由你自己加上 agent:fix 标签。
+about: 交给本地 agent 流水线的一次有边界改动。正文写完后，由你自己加上 ready 标签。
 title: ""
 labels: []
 ---

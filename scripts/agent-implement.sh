@@ -18,7 +18,7 @@ usage() {
   cat <<'EOF'
 用法: scripts/agent-implement.sh <issue-number> [--dry-run] [--fix]
 
-读取带 agent:fix 标签、且包含 Goal / Acceptance / Only-edit 的 Issue。
+读取带 ready 标签、且包含 Goal / Acceptance / Only-edit 的 Issue。
 创建 worktree 和分支 agent/fix-<issue>，调用本地编码 agent，
 测试通过后 gh pr create，并在正文里关联这个 Issue。
 
@@ -116,8 +116,8 @@ body_sha=$(agent_pipeline_hash_file "$WORKDIR/body.md")
 if [[ "$issue_state" != "OPEN" ]]; then
   agent_pipeline_die "issue #$ISSUE 不是打开状态（当前 $issue_state）"
 fi
-if ! agent_pipeline_py has-label "$WORKDIR/issue.json" "agent:fix"; then
-  agent_pipeline_die "issue #$ISSUE 没有标签 agent:fix"
+if ! agent_pipeline_py has-label "$WORKDIR/issue.json" "ready"; then
+  agent_pipeline_die "issue #$ISSUE 没有标签 ready"
 fi
 
 missing=""

@@ -2,7 +2,7 @@
 # 本机轮询。约定见 docs/agent-pipeline.md。
 # 用法: scripts/agent-poll.sh [--once] [--interval SEC] [--dry-run] [--no-merge]
 #
-# 只处理带 agent:fix 的打开 Issue。每一轮每个 Issue 只推进一步。
+# 只处理带 ready 标签的打开 Issue。每一轮每个 Issue 只推进一步。
 # 同一时间只跑一个实现者或审查者。Ctrl-C 结束。
 
 set -euo pipefail
@@ -15,7 +15,7 @@ usage() {
   cat <<'EOF'
 用法: scripts/agent-poll.sh [--once] [--interval SEC] [--dry-run] [--no-merge]
 
-前台轮询打开的、带 agent:fix 的 Issue，以及本流水线打开的 PR。
+前台轮询打开的、带 ready 标签的 Issue，以及本流水线打开的 PR。
 没有公网 webhook。Cloud Agent 和 GitHub Actions 不在这个脚本里。
 
 --once       只跑一轮
@@ -272,11 +272,11 @@ run_review() {
 }
 
 poll_once() {
-  if ! agent_pipeline_label_exists "agent:fix"; then
-    agent_pipeline_die "标签 agent:fix 不存在。先执行: gh label create agent:fix --description \"Local agent pipeline may implement this issue\" --color 1D76DB"
+  if ! agent_pipeline_label_exists "ready"; then
+    agent_pipeline_die "标签 ready 不存在。本仓库应已有它（可以由agent接管开发的issues）。缺失时执行: gh label create ready --description \"可以由agent接管开发的issues\" --color 9d88c3"
   fi
   local issues_raw sorted issue
-  issues_raw=$(gh issue list --label "agent:fix" --state open --limit 50 --json number --jq '.[].number')
+  issues_raw=$(gh issue list --label "ready" --state open --limit 50 --json number --jq '.[].number')
   if [[ "$DRY" -eq 1 ]]; then
     PRS_JSON=$(mktemp)
   else
