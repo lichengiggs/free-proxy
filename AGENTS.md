@@ -94,6 +94,13 @@
   - OpenClaw：写入 `~/.openclaw/openclaw.json`，provider `free-proxy`，`baseUrl` 为 `http://localhost:8765/v1`，模型 id 为 `auto`
   - Opencode：写入 `~/.config/opencode/opencode.json`，provider `free-proxy`，`baseURL` 为 `http://127.0.0.1:8765/v1`，模型 id 为 `auto`
 
+## 本地 agent pipeline
+
+- 这是仓库脚手架，不改变代理运行时。
+- 约定、阶段和干跑：`docs/agent-pipeline.md`
+- 人开 Issue 并打上 `agent:fix` 之后才进入流水线。实现与审查必须分进程。
+- 脚本：`scripts/agent-implement.sh`、`scripts/agent-review.sh`、`scripts/agent-poll.sh`
+
 ## 工具规范
 
 - 代码搜索必须优先使用 `rg`，并默认带 `--smart-case`；按需加 `--context`。

@@ -178,6 +178,12 @@ The Opencode action on the page writes `~/.config/opencode/opencode.json`:
 
 The verification command is in the previous section.
 
+## Local agent pipeline
+
+This is local scaffolding. It does not change how free-proxy runs. A person opens a GitHub issue and adds the `agent:fix` label. A poll script on that machine then calls a coding-agent CLI and `gh`: an implementer opens a pull request, a reviewer in a separate process returns `ACCEPT` or `REJECT`, and `ACCEPT` with green checks squash-merges.
+
+See [docs/agent-pipeline.md](docs/agent-pipeline.md). Cloud Agent and GitHub Actions are out of scope for this scaffold.
+
 ## FAQ
 
 ### The page does not open
