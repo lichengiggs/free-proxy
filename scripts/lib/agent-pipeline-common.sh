@@ -538,14 +538,15 @@ agent_pipeline_run_timeout() {
 }
 
 # Invoke the local coding agent in workdir. stdout is copied to stdout_log.
-# TODO: the binary name and flags differ by Mac install. Set AGENT_BIN.
+#   agent -p --trust --force "<prompt>"      headless Cursor agent; default
 #   opencode run --format json "<prompt>"    non-interactive; do not open the TUI
-#   agent -p "<prompt>"                      print / headless mode
+# A new worktree is untrusted. --trust --force keeps the headless agent from
+# stopping on a trust or approval prompt. Set AGENT_BIN=opencode to use opencode.
 # If the prompt is too long for argv, set AGENT_PROMPT_VIA=stdin.
 # Optional model pin: AGENT_MODEL. This does not default to free-proxy/auto.
 agent_pipeline_invoke() {
   local workdir="$1" prompt_file="$2" stdout_log="$3"
-  local bin="${AGENT_BIN:-opencode}"
+  local bin="${AGENT_BIN:-agent}"
   local base prompt
   if [[ "${AGENT_PIPELINE_DRY_RUN:-0}" == "1" ]]; then
     agent_pipeline_log "dry-run: not invoking $bin (prompt $prompt_file)"
@@ -572,15 +573,14 @@ agent_pipeline_invoke() {
       fi
       ;;
     agent)
-      if [[ -n "${AGENT_MODEL:-}" && "${AGENT_PROMPT_VIA:-arg}" == "stdin" ]]; then
-        # TODO: confirm --model on this agent build. Flag is a best guess.
-        (cd "$workdir" && agent_pipeline_run_timeout "$bin" -p --model "$AGENT_MODEL") < "$prompt_file" | tee "$stdout_log"
-      elif [[ -n "${AGENT_MODEL:-}" ]]; then
-        (cd "$workdir" && agent_pipeline_run_timeout "$bin" -p --model "$AGENT_MODEL" "$prompt") | tee "$stdout_log"
-      elif [[ "${AGENT_PROMPT_VIA:-arg}" == "stdin" ]]; then
-        (cd "$workdir" && agent_pipeline_run_timeout "$bin" -p) < "$prompt_file" | tee "$stdout_log"
+      local -a agent_args=(-p --trust --force)
+      if [[ -n "${AGENT_MODEL:-}" ]]; then
+        agent_args+=(--model "$AGENT_MODEL")
+      fi
+      if [[ "${AGENT_PROMPT_VIA:-arg}" == "stdin" ]]; then
+        (cd "$workdir" && agent_pipeline_run_timeout "$bin" "${agent_args[@]}") < "$prompt_file" | tee "$stdout_log"
       else
-        (cd "$workdir" && agent_pipeline_run_timeout "$bin" -p "$prompt") | tee "$stdout_log"
+        (cd "$workdir" && agent_pipeline_run_timeout "$bin" "${agent_args[@]}" "$prompt") | tee "$stdout_log"
       fi
       ;;
     *)

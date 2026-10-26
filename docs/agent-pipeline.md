@@ -2,7 +2,7 @@
 
 这是个人仓库用的本地脚手架，不改变 free-proxy 的运行行为。
 
-人只做一件事：写好 GitHub Issue，加上标签 `ready`。之后由这台 Mac 上的脚本调用本地编码 CLI（`opencode` 或 `agent -p`）和 `gh`，完成实现、开 PR、审查、合并。
+人只做一件事：写好 GitHub Issue，加上标签 `ready`。之后由这台 Mac 上的脚本调用本地编码 CLI（默认 `agent -p --trust --force`，也可以用 `AGENT_BIN=opencode`）和 `gh`，完成实现、开 PR、审查、合并。
 
 审查者给出 `ACCEPT`，并且约定检查是绿的，脚本就 squash 合并、关闭 Issue、删除分支。自动合并有风险，这个仓库的主人接受这个风险。
 
@@ -133,7 +133,7 @@ GitHub checks 还在跑时，后续轮询继续等（默认 10 轮）。head SHA
 - 已登录这个仓库的 `gh`（`gh auth status`）
 - `python3`（脚本用它读 JSON 和 Issue 小节）
 - 想用和仓库一致的测试命令时，需要 `uv`
-- 一个编码 CLI：默认 `opencode`，也可以是 `agent`。用 `AGENT_BIN` 指定
+- 一个编码 CLI：默认 `agent`。换回 opencode 时设置 `AGENT_BIN=opencode`
 
 在仓库根目录：
 
@@ -173,7 +173,7 @@ scripts/agent-implement.sh 123 --fix
 
 | 变量 | 默认 | 含义 |
 |---|---|---|
-| `AGENT_BIN` | `opencode` | `opencode` 或 `agent` |
+| `AGENT_BIN` | `agent` | `agent` 或 `opencode`。`agent` 会加上 `--trust --force`，新 worktree 才不会停在信任提示上。 |
 | `AGENT_MODEL` | 空 | 可选模型。不会默认成 `free-proxy/auto`。 |
 | `AGENT_PROMPT_VIA` | `arg` | 提示词太长时改为 `stdin` |
 | `AGENT_TIMEOUT` | `1800` | 秒。`0` 表示不限制。需要系统里有 `timeout`；没有的话不会杀进程。 |

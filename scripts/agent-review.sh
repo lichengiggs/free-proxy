@@ -277,7 +277,7 @@ fi
 if [[ "$DRY" -eq 1 ]]; then
   printf 'dry-run: 将在新 worktree 审查 PR #%s（issue #%s）\n' "$PR" "$ISSUE"
   printf 'dry-run: 分支 %s @ %s，基于 %s\n' "$head_ref" "$head_sha" "$base_ref"
-  printf 'dry-run: agent=%s。ACCEPT 后 merge=%s\n' "${AGENT_BIN:-opencode}" "$MERGE"
+  printf 'dry-run: agent=%s。ACCEPT 后 merge=%s\n' "${AGENT_BIN:-agent}" "$MERGE"
   exit 0
 fi
 

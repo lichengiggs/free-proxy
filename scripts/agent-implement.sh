@@ -4,7 +4,7 @@
 #
 # 假设:
 # - 在 git 仓库里执行，GitHub 远程名是 origin。
-# - 编码 CLI 由 AGENT_BIN 决定，默认 opencode。精确参数见
+# - 编码 CLI 由 AGENT_BIN 决定，默认 agent。精确参数见
 #   scripts/lib/agent-pipeline-common.sh 里的 agent_pipeline_invoke。
 # - 本脚本会提交、跑测试、push、开 PR。agent 只改 worktree。
 
@@ -218,7 +218,7 @@ if [[ "$DRY" -eq 1 ]]; then
   printf 'dry-run: 将处理 issue #%s\n' "$ISSUE"
   printf 'dry-run: 分支 %s，基于 origin/%s\n' "$branch" "$base"
   printf 'dry-run: worktree %s\n' "$wt"
-  printf 'dry-run: agent=%s，然后跑 unittest，再 gh pr create\n' "${AGENT_BIN:-opencode}"
+  printf 'dry-run: agent=%s，然后跑 unittest，再 gh pr create\n' "${AGENT_BIN:-agent}"
   exit 0
 fi
 
