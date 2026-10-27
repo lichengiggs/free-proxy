@@ -245,7 +245,7 @@ class OpenAIRelayTests(unittest.TestCase):
         self.assertLess(len(str(payload['messages'][0]['content'])), len(long_text))
         self.assertLess(len(str(payload['messages'][1]['content'])), len(long_text))
         self.assertEqual(payload['max_tokens'], response_token_budget('openrouter'))
-        self.assertFalse(bool(payload['stream']))
+        self.assertIs(payload['stream'], True)
 
     def test_relay_drops_old_history_when_context_exceeds_provider_budget(self) -> None:
         class BudgetAwareAdapter:
@@ -492,7 +492,7 @@ class OpenAIRelayTests(unittest.TestCase):
         self.assertNotIn('system', payload)
         self.assertNotIn('requested_model', payload)
         self.assertEqual(payload['model'], 'z-ai/glm-5.2')
-        self.assertEqual(payload['stream'], False)
+        self.assertIs(payload['stream'], True)
         self.assertEqual(payload['max_tokens'], 1024)
         self.assertEqual(payload['messages'][0]['role'], 'system')
         self.assertEqual(payload['messages'][0]['content'], 'You are a helpful assistant.')
@@ -632,7 +632,7 @@ class OpenAIRelayTests(unittest.TestCase):
         self.assertIn(b'ok-groq', chunks[0])
 
     def test_relay_forces_stream_false_upstream_even_when_client_requests_stream(self) -> None:
-        """Verify that relay always forces stream=False upstream, protecting fallback semantics."""
+        """OpenAI providers stream upstream when the client asks for SSE."""
         stream_values: list[bool] = []
 
         class StreamCheckAdapter:
@@ -648,7 +648,249 @@ class OpenAIRelayTests(unittest.TestCase):
         )
         request = ChatRequest('free-proxy/auto', None, [{'role': 'user', 'content': 'hi'}], True, None, None, {'model': 'auto', 'messages': [{'role': 'user', 'content': 'hi'}], 'stream': True})
         relay.handle_chat(request)
-        self.assertEqual(stream_values, [False])
+        self.assertEqual(stream_values, [True])
+
+    def test_payload_for_candidate_keeps_gemini_non_streaming(self) -> None:
+        relay = OpenAIRelay(
+            adapter_factory=lambda provider: FakeAdapter(),
+            health_loader=lambda: {},
+            health_ttl_seconds=60,
+            configured_providers_loader=lambda: ['gemini'],
+        )
+        request = ChatRequest(
+            'free-proxy/auto',
+            None,
+            [{'role': 'user', 'content': 'hi'}],
+            True,
+            None,
+            None,
+            {'model': 'auto', 'messages': [{'role': 'user', 'content': 'hi'}], 'stream': True},
+        )
+        payload = relay._payload_for_candidate('gemini', 'gemini-2.0-flash', request)
+        self.assertIs(payload['stream'], False)
+
+    def test_relay_passes_upstream_sse_through_and_does_not_call_next_provider(self) -> None:
+        calls: list[tuple[str, str]] = []
+        consumed = {'n': 0}
+        reasoning = b'data: {"choices":[{"delta":{"reasoning_content":"think-1"},"index":0}]}\n\n'
+        content = b'data: {"choices":[{"delta":{"content":"answer-1"},"index":0}]}\n\n'
+        done = b'data: [DONE]\n\n'
+
+        def events():
+            consumed['n'] += 1
+            yield reasoning
+            consumed['n'] += 1
+            yield content
+            consumed['n'] += 1
+            yield done
+
+        stream_flags: list[object] = []
+
+        class StreamingAdapter:
+            def __init__(self, provider: str) -> None:
+                self.provider = provider
+
+            def forward_chat(self, payload: dict[str, object]):
+                calls.append((self.provider, str(payload.get('model', ''))))
+                stream_flags.append(payload.get('stream'))
+                if self.provider == 'groq':
+                    return type('AdapterResponse', (), {'status': 200, 'headers': {'Content-Type': 'text/event-stream; charset=utf-8'}, 'body': None, 'stream': events(), 'content_type': 'text/event-stream; charset=utf-8'})()
+                return type('AdapterResponse', (), {'status': 200, 'headers': {'Content-Type': 'application/json; charset=utf-8'}, 'body': b'{"choices":[{"message":{"content":"next"}}]}', 'stream': None, 'content_type': 'application/json; charset=utf-8'})()
+
+        relay = OpenAIRelay(
+            adapter_factory=lambda provider: StreamingAdapter(provider),
+            health_loader=lambda: {},
+            health_ttl_seconds=60,
+            configured_providers_loader=lambda: ['groq', 'openrouter'],
+        )
+        request = ChatRequest('free-proxy/auto', None, [{'role': 'user', 'content': 'hi'}], True, None, None, {'model': 'auto', 'messages': [{'role': 'user', 'content': 'hi'}], 'stream': True})
+        response = relay.handle_chat(request)
+
+        self.assertEqual(response.status, 200)
+        self.assertEqual(calls, [('groq', 'llama-3.1-8b-instant')])
+        self.assertEqual(stream_flags, [True])
+        self.assertEqual(consumed['n'], 0)
+        self.assertIsNone(response.body)
+        self.assertEqual(list(response.stream_chunks or []), [reasoning, content, done])
+        self.assertEqual(consumed['n'], 3)
+
+    def test_relay_synthesizes_json_from_upstream_sse_when_client_does_not_stream(self) -> None:
+        calls: list[str] = []
+
+        class StreamingAdapter:
+            def forward_chat(self, payload: dict[str, object]):
+                calls.append(str(payload.get('stream')))
+                return type(
+                    'AdapterResponse',
+                    (),
+                    {
+                        'status': 200,
+                        'headers': {'Content-Type': 'text/event-stream; charset=utf-8'},
+                        'body': None,
+                        'stream': iter([
+                            b'data: {"choices":[{"index":0,"delta":{"reasoning_content":"think-1"}}]}\n\n',
+                            b'data: {"choices":[{"index":0,"delta":{"content":"answer-1"},"finish_reason":"stop"}]}\n\n',
+                            b'data: [DONE]\n\n',
+                        ]),
+                        'content_type': 'text/event-stream; charset=utf-8',
+                    },
+                )()
+
+        relay = OpenAIRelay(
+            adapter_factory=lambda provider: StreamingAdapter(),
+            health_loader=lambda: {},
+            health_ttl_seconds=60,
+            configured_providers_loader=lambda: ['groq'],
+        )
+        request = ChatRequest('free-proxy/auto', None, [{'role': 'user', 'content': 'hi'}], False, None, None, {'model': 'auto', 'messages': [{'role': 'user', 'content': 'hi'}]})
+        response = relay.handle_chat(request)
+
+        self.assertEqual(response.status, 200)
+        self.assertEqual(calls, ['True'])
+        self.assertIsNone(response.stream_chunks)
+        parsed = json.loads(response.body or b'{}')
+        self.assertEqual(parsed['choices'][0]['message']['content'], 'answer-1')
+        self.assertEqual(parsed['choices'][0]['finish_reason'], 'stop')
+
+    def test_relay_synthesizes_reasoning_when_sse_content_is_empty(self) -> None:
+        class ReasoningAdapter:
+            def forward_chat(self, payload: dict[str, object]):
+                del payload
+                return type(
+                    'AdapterResponse',
+                    (),
+                    {
+                        'status': 200,
+                        'headers': {'Content-Type': 'text/event-stream; charset=utf-8'},
+                        'body': None,
+                        'stream': iter([
+                            b'data: {"choices":[{"index":0,"delta":{"reasoning_content":"think-1"}}]}\n\n',
+                            b'data: {"choices":[{"index":0,"delta":{"reasoning_content":"think-2"},"finish_reason":"length"}]}\n\n',
+                            b'data: [DONE]\n\n',
+                        ]),
+                        'content_type': 'text/event-stream; charset=utf-8',
+                    },
+                )()
+
+        relay = OpenAIRelay(
+            adapter_factory=lambda provider: ReasoningAdapter(),
+            health_loader=lambda: {},
+            health_ttl_seconds=60,
+            configured_providers_loader=lambda: ['groq'],
+        )
+        request = ChatRequest('free-proxy/auto', None, [{'role': 'user', 'content': 'hi'}], False, None, None, {'model': 'auto', 'messages': [{'role': 'user', 'content': 'hi'}]})
+        response = relay.handle_chat(request)
+        parsed = json.loads(response.body or b'{}')
+        self.assertEqual(parsed['choices'][0]['message']['content'], 'think-1think-2')
+        self.assertEqual(parsed['choices'][0]['finish_reason'], 'length')
+
+    def test_relay_falls_back_when_first_openai_provider_returns_http_500(self) -> None:
+        calls: list[str] = []
+
+        class Adapter:
+            def __init__(self, provider: str) -> None:
+                self.provider = provider
+
+            def forward_chat(self, payload: dict[str, object]):
+                del payload
+                calls.append(self.provider)
+                if self.provider == 'groq':
+                    return type(
+                        'AdapterResponse',
+                        (),
+                        {
+                            'status': 500,
+                            'headers': {'Content-Type': 'application/json; charset=utf-8'},
+                            'body': None,
+                            'stream': iter([b'{"error":{"message":"server error"}}']),
+                            'content_type': 'application/json; charset=utf-8',
+                        },
+                    )()
+                return type('AdapterResponse', (), {'status': 200, 'headers': {'Content-Type': 'application/json; charset=utf-8'}, 'body': b'{"choices":[{"message":{"content":"from-openrouter"}}]}', 'stream': None, 'content_type': 'application/json; charset=utf-8'})()
+
+        relay = OpenAIRelay(
+            adapter_factory=lambda provider: Adapter(provider),
+            health_loader=lambda: {},
+            health_ttl_seconds=60,
+            configured_providers_loader=lambda: ['groq', 'openrouter'],
+        )
+        request = ChatRequest('free-proxy/auto', None, [{'role': 'user', 'content': 'hi'}], True, None, None, {'model': 'auto', 'messages': [{'role': 'user', 'content': 'hi'}], 'stream': True})
+        response = relay.handle_chat(request)
+
+        self.assertEqual(response.status, 200)
+        self.assertEqual(calls[0], 'groq')
+        self.assertIn('openrouter', calls)
+        chunks = b''.join(list(response.stream_chunks or []))
+        self.assertIn(b'from-openrouter', chunks)
+
+    def test_relay_falls_back_when_sse_read_fails_before_handoff(self) -> None:
+        calls: list[tuple[str, str]] = []
+
+        def broken():
+            yield b'data: {"choices":[{"index":0,"delta":{"content":"partial"}}]}\n\n'
+            raise ProviderError('The read operation timed out')
+
+        class Adapter:
+            def __init__(self, provider: str) -> None:
+                self.provider = provider
+
+            def forward_chat(self, payload: dict[str, object]):
+                model = str(payload.get('model', ''))
+                calls.append((self.provider, model))
+                if self.provider == 'groq' and model == 'llama-3.1-8b-instant':
+                    return type('AdapterResponse', (), {'status': 200, 'headers': {'Content-Type': 'text/event-stream; charset=utf-8'}, 'body': None, 'stream': broken(), 'content_type': 'text/event-stream; charset=utf-8'})()
+                return type('AdapterResponse', (), {'status': 200, 'headers': {'Content-Type': 'application/json; charset=utf-8'}, 'body': b'{"choices":[{"message":{"content":"from-next"}}]}', 'stream': None, 'content_type': 'application/json; charset=utf-8'})()
+
+        relay = OpenAIRelay(
+            adapter_factory=lambda provider: Adapter(provider),
+            health_loader=lambda: {},
+            health_ttl_seconds=60,
+            configured_providers_loader=lambda: ['groq', 'openrouter'],
+        )
+        request = ChatRequest('free-proxy/auto', None, [{'role': 'user', 'content': 'hi'}], False, None, None, {'model': 'auto', 'messages': [{'role': 'user', 'content': 'hi'}]})
+        response = relay.handle_chat(request)
+
+        self.assertEqual(response.status, 200)
+        self.assertEqual(calls[0], ('groq', 'llama-3.1-8b-instant'))
+        self.assertGreaterEqual(len(calls), 2)
+        self.assertIn(b'from-next', response.body or b'')
+        self.assertNotIn(b'partial', response.body or b'')
+
+    def test_relay_keeps_json_sse_wrap_when_adapter_has_no_stream(self) -> None:
+        class JsonAdapter:
+            def forward_chat(self, payload: dict[str, object]):
+                self.stream_flag = payload.get('stream')
+                return type(
+                    'AdapterResponse',
+                    (),
+                    {
+                        'status': 200,
+                        'headers': {'Content-Type': 'application/json; charset=utf-8'},
+                        'body': b'{"id":"chatcmpl-test","object":"chat.completion","created":1,"model":"groq/llama","choices":[{"index":0,"message":{"role":"assistant","content":"json-body"},"finish_reason":"stop"}]}',
+                        'stream': None,
+                        'content_type': 'application/json; charset=utf-8',
+                    },
+                )()
+
+        adapter = JsonAdapter()
+        relay = OpenAIRelay(
+            adapter_factory=lambda provider: adapter,
+            health_loader=lambda: {},
+            health_ttl_seconds=60,
+            configured_providers_loader=lambda: ['groq'],
+        )
+        streaming = ChatRequest('free-proxy/auto', None, [{'role': 'user', 'content': 'hi'}], True, None, None, {'model': 'auto', 'messages': [{'role': 'user', 'content': 'hi'}], 'stream': True})
+        streamed = relay.handle_chat(streaming)
+        self.assertIs(adapter.stream_flag, True)
+        self.assertIsNone(streamed.body)
+        streamed_chunks = b''.join(list(streamed.stream_chunks or []))
+        self.assertIn(b'json-body', streamed_chunks)
+        self.assertIn(b'data: [DONE]', streamed_chunks)
+
+        plain = ChatRequest('free-proxy/auto', None, [{'role': 'user', 'content': 'hi'}], False, None, None, {'model': 'auto', 'messages': [{'role': 'user', 'content': 'hi'}]})
+        json_response = relay.handle_chat(plain)
+        self.assertIsNone(json_response.stream_chunks)
+        self.assertIn(b'json-body', json_response.body or b'')
 
 
 class _Clock:

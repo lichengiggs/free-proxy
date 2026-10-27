@@ -5,16 +5,30 @@ import os
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from python_scripts.health_store import load_health
 from python_scripts.provider_errors import ProviderError
-from python_scripts.service import OpenAIForwardResult, ProxyService, ResolvedOpenAIRequest
+from python_scripts.service import ProxyService, ResolvedOpenAIRequest
 
 
 class FakeTransport:
     def __init__(self) -> None:
         self.calls: list[tuple[str, str]] = []
         self.timeouts: list[int] = []
+        self.stream_calls: list[int] = []
+
+    def stream_request(
+        self,
+        method: str,
+        url: str,
+        headers: dict[str, str] | None = None,
+        body: bytes | None = None,
+        timeout: int = 30,
+    ) -> tuple[int, dict[str, str], object]:
+        del method, url, headers, body
+        self.stream_calls.append(timeout)
+        return 200, {}, iter([b''])
 
     def request(
         self,
@@ -33,6 +47,22 @@ class FakeTransport:
 
 
 class GeminiTransport:
+    def __init__(self) -> None:
+        self.urls: list[str] = []
+        self.stream_calls = 0
+
+    def stream_request(
+        self,
+        method: str,
+        url: str,
+        headers: dict[str, str] | None = None,
+        body: bytes | None = None,
+        timeout: int = 30,
+    ) -> tuple[int, dict[str, str], object]:
+        del method, url, headers, body, timeout
+        self.stream_calls += 1
+        raise AssertionError('gemini must not use stream_request')
+
     def request(
         self,
         method: str,
@@ -42,6 +72,7 @@ class GeminiTransport:
         timeout: int = 30,
     ) -> tuple[int, dict[str, str], bytes]:
         del headers, body, timeout
+        self.urls.append(url)
         if method == 'GET' and url.endswith('/models'):
             return 200, {}, json.dumps({'models': [{'id': 'models/gemini-2.0-flash'}]}).encode('utf-8')
         return 200, {}, json.dumps({'candidates': [{'content': {'parts': [{'text': 'gemini-ok'}]}}]}).encode('utf-8')
@@ -199,6 +230,23 @@ class RawTransport:
         self.last_payload = payload
         return 200, {'Content-Type': 'application/json; charset=utf-8'}, json.dumps({'model': payload.get('model'), 'ok': True}).encode()
 
+    def stream_request(
+        self,
+        method: str,
+        url: str,
+        headers: dict[str, str] | None = None,
+        body: bytes | None = None,
+        timeout: int = 30,
+    ) -> tuple[int, dict[str, str], object]:
+        del method, url, headers, timeout
+        payload = json.loads((body or b'{}').decode('utf-8'))
+        self.last_payload = payload
+        event = json.dumps({'choices': [{'index': 0, 'delta': {'content': 'ok'}, 'finish_reason': 'stop'}]}, separators=(',', ':')).encode('utf-8')
+        return 200, {'Content-Type': 'text/event-stream; charset=utf-8'}, iter([
+            b'data: ' + event + b'\n\n',
+            b'data: [DONE]\n\n',
+        ])
+
 
 class ChunkedStreamTransport(RawTransport):
     def __init__(self) -> None:
@@ -327,6 +375,7 @@ class ServiceTests(unittest.TestCase):
         service = self.make_service(transport, request_timeout_seconds=7)
         service.probe('openrouter', 'ok-model')
         self.assertTrue(any(value == 7 for value in transport.timeouts))
+        self.assertEqual(transport.stream_calls, [])
 
     def test_chat_is_strict_for_explicit_model(self) -> None:
         transport = FallbackTransport()
@@ -350,11 +399,10 @@ class ServiceTests(unittest.TestCase):
             result = service.forward_direct_chat('openrouter', 'model-a', {'model': 'model-a', 'prompt': 'hello', 'stream': True})
 
             self.assertTrue(result.ok)
-            self.assertIsNone(result.stream_chunks)
-            self.assertIsNotNone(result.body)
-            parsed = json.loads((result.body or b'{}').decode('utf-8'))
-            self.assertTrue(bool(parsed.get('ok')))
-            self.assertEqual(transport.last_payload and transport.last_payload.get('stream'), False)
+            chunks = list(result.stream_chunks or [])
+            self.assertEqual(chunks[-1], b'data: [DONE]\n\n')
+            self.assertIn(b'"content":"ok"', chunks[0])
+            self.assertEqual(transport.last_payload and transport.last_payload.get('stream'), True)
             self.assertEqual(transport.last_payload and transport.last_payload.get('messages'), [{'role': 'user', 'content': 'hello'}])
 
     def test_probe_keeps_small_output_budget_for_non_thinking_models(self) -> None:
@@ -498,24 +546,20 @@ class ServiceTests(unittest.TestCase):
                 os.environ['GROQ_API_KEY'] = previous
 
     def test_execute_openai_target_returns_raw_forward_result_for_openai_provider(self) -> None:
-        service = self.make_service(RawTransport())
+        transport = RawTransport()
+        service = self.make_service(transport)
         target = ResolvedOpenAIRequest(provider='openrouter', model='model-a', alias=None)
         result = service.execute_openai_target(target, {'model': 'ignored'})
-        self.assertEqual(
-            result,
-            OpenAIForwardResult(
-                ok=True,
-                provider='openrouter',
-                model='model-a',
-                status=200,
-                headers={'Content-Type': 'application/json; charset=utf-8'},
-                body=b'{"model": "model-a", "ok": true}',
-                content=None,
-                error=None,
-                category=None,
-                suggestion=None,
-            ),
-        )
+        self.assertTrue(result.ok)
+        self.assertEqual(result.provider, 'openrouter')
+        self.assertEqual(result.model, 'model-a')
+        self.assertEqual(result.status, 200)
+        self.assertIsNone(result.stream_chunks)
+        self.assertEqual(result.headers.get('Content-Type'), 'application/json; charset=utf-8')
+        self.assertIs(transport.last_payload.get('stream') if transport.last_payload else None, True)
+        parsed = json.loads(result.body)
+        self.assertEqual(parsed['choices'][0]['message']['content'], 'ok')
+        self.assertEqual(parsed['choices'][0]['finish_reason'], 'stop')
 
     def test_forward_direct_chat_strips_local_provider_field_before_upstream_request(self) -> None:
         transport = RawTransport()
@@ -573,14 +617,63 @@ class ServiceTests(unittest.TestCase):
         transport = ChunkedStreamTransport()
         service = self.make_service(transport)
         target = ResolvedOpenAIRequest(provider='openrouter', model='model-a', alias=None)
-        result = service.execute_openai_target(target, {'model': 'ignored', 'stream': True, 'messages': [{'role': 'user', 'content': 'hello'}]})
+        with patch('python_scripts.service.get_model_capabilities', return_value={'streaming': False}):
+            result = service.execute_openai_target(target, {'model': 'ignored', 'stream': True, 'messages': [{'role': 'user', 'content': 'hello'}]})
+
+        self.assertTrue(result.ok)
+        self.assertEqual(
+            list(result.stream_chunks or []),
+            [
+                b'data: {"choices":[{"delta":{"reasoning_content":"think-1"},"index":0}]}\n\n',
+                b'data: {"choices":[{"delta":{"content":"answer-1"},"index":0}]}\n\n',
+                b'data: [DONE]\n\n',
+            ],
+        )
+        self.assertIs(transport.last_payload.get('stream') if transport.last_payload else None, True)
+
+    def test_execute_openai_target_synthesizes_json_when_client_does_not_stream(self) -> None:
+        transport = ChunkedStreamTransport()
+        service = self.make_service(transport)
+        target = ResolvedOpenAIRequest(provider='openrouter', model='model-a', alias=None)
+        result = service.execute_openai_target(target, {'model': 'ignored', 'stream': False, 'messages': [{'role': 'user', 'content': 'hello'}]})
 
         self.assertTrue(result.ok)
         self.assertIsNone(result.stream_chunks)
-        self.assertEqual(transport.last_payload and transport.last_payload.get('stream'), False)
-        self.assertIsNotNone(result.body)
+        self.assertIs(transport.last_payload.get('stream') if transport.last_payload else None, True)
+        parsed = json.loads(result.body)
+        self.assertEqual(parsed['choices'][0]['message']['content'], 'answer-1')
+        self.assertNotIn('think-1', parsed['choices'][0]['message']['content'])
+
+    def test_execute_openai_target_uses_reasoning_when_sse_content_is_empty(self) -> None:
+        class ReasoningOnlyTransport(ChunkedStreamTransport):
+            def stream_request(
+                self,
+                method: str,
+                url: str,
+                headers: dict[str, str] | None = None,
+                body: bytes | None = None,
+                timeout: int = 30,
+            ) -> tuple[int, dict[str, str], object]:
+                del method, url, headers, timeout
+                self.last_payload = json.loads((body or b'{}').decode('utf-8'))
+                return 200, {'Content-Type': 'text/event-stream; charset=utf-8'}, iter([
+                    b'data: {"choices":[{"index":0,"delta":{"reasoning_content":"think-1"}}]}\n\n',
+                    b'data: {"choices":[{"index":0,"delta":{"reasoning_content":"think-2"},"finish_reason":"length"}]}\n\n',
+                    b'data: [DONE]\n\n',
+                ])
+
+        transport = ReasoningOnlyTransport()
+        service = self.make_service(transport)
+        target = ResolvedOpenAIRequest(provider='openrouter', model='model-a', alias=None)
+        result = service.execute_openai_target(target, {'model': 'ignored', 'stream': False, 'messages': [{'role': 'user', 'content': 'hello'}]})
+
+        self.assertTrue(result.ok)
+        parsed = json.loads(result.body)
+        self.assertEqual(parsed['choices'][0]['message']['content'], 'think-1think-2')
+        self.assertEqual(parsed['choices'][0]['finish_reason'], 'length')
 
     def test_execute_openai_target_ignores_stream_flag_for_non_openai_provider(self) -> None:
+        os.environ['GEMINI_API_KEY'] = 'test-gemini-key'
         transport = GeminiTransport()
         service = self.make_service(transport)
         target = ResolvedOpenAIRequest(provider='gemini', model='gemini-2.0-flash', alias=None)
@@ -589,6 +682,8 @@ class ServiceTests(unittest.TestCase):
         self.assertTrue(result.ok)
         self.assertIsNone(result.stream_chunks)
         self.assertEqual(result.content, 'gemini-ok')
+        self.assertEqual(transport.stream_calls, 0)
+        self.assertTrue(any('generateContent' in url for url in transport.urls))
 
     def test_chat_retries_once_after_token_limit_and_persists_learned_limit(self) -> None:
         transport = TokenLimitRetryTransport()
@@ -636,6 +731,17 @@ class ServiceTests(unittest.TestCase):
             def request(self, method: str, url: str, headers: dict[str, str] | None = None, body: bytes | None = None, timeout: int = 30) -> tuple[int, dict[str, str], bytes]:
                 del method, headers, body, timeout
                 return 403, {'cf-ray': 'ray-1'}, b'{"error":{"message":"error code: 1010"}}'
+
+            def stream_request(
+                self,
+                method: str,
+                url: str,
+                headers: dict[str, str] | None = None,
+                body: bytes | None = None,
+                timeout: int = 30,
+            ) -> tuple[int, dict[str, str], object]:
+                del method, url, headers, body, timeout
+                return 403, {'cf-ray': 'ray-1'}, iter([b'{"error":{"message":"error code: 1010"}}'])
 
         service = ProxyService(transport=FailTransport(), debug_log=debug_log)
         result = service.execute_openai_target(ResolvedOpenAIRequest(provider='openrouter', model='model-a', alias=None), {'model': 'model-a'})

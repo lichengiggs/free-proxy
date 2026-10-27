@@ -12,6 +12,7 @@ from .env_store import upsert_env
 from .errors import classify_error, remediation_suggestion
 from .health_store import hash_api_key, load_health, upsert_health
 from .openai_relay import OpenAIRelay
+from .response_normalizer import synthesize_openai_json_from_sse
 from .preferred_model_store import load_preferred_model, save_preferred_model
 from .provider_adapter import ProviderAdapter
 from .provider_catalog import configured_provider_names, get_model_capabilities, get_provider, get_provider_model_hints, list_providers
@@ -506,17 +507,12 @@ class ProxyService:
             request_payload['messages'] = [{'role': 'user', 'content': budget.trimmed_prompt}]
             request_payload.pop('prompt', None)
 
+        # 客户端是否要流式只决定怎么写回；OpenAI 上游始终开流，不再看 capabilities.streaming。
         requested_stream = bool(payload.get('stream'))
-        capabilities = get_model_capabilities(provider_name, normalized_model_id)
-        upstream_stream = requested_stream and capabilities.get('streaming', False)
-        request_payload['stream'] = upstream_stream
+        request_payload['stream'] = True
 
         try:
-            if upstream_stream:
-                status, headers, stream_iter = adapter.chat_completions_stream(request_payload)
-            else:
-                status, headers, body = adapter.chat_completions_raw(request_payload)
-                stream_iter = None
+            status, headers, stream_iter = adapter.chat_completions_stream(request_payload)
         except ProviderError as exc:
             category = classify_error(0, str(exc)).category
             return OpenAIForwardResult(
@@ -532,12 +528,53 @@ class ProxyService:
             )
 
         if status < 400:
+            if not requested_stream:
+                try:
+                    body = synthesize_openai_json_from_sse(
+                        stream_iter,
+                        provider=provider_name,
+                        model=normalized_model_id,
+                    )
+                except Exception as exc:
+                    failure = classify_error(0, str(exc))
+                    upsert_health(provider_name, normalized_model_id, False, reason=failure.category, path=self.health_path)
+                    if self.debug_log is not None:
+                        self.debug_log(
+                            'request_failed',
+                            provider=provider_name,
+                            model=normalized_model_id,
+                            status=502,
+                            category=failure.category,
+                            error=str(exc),
+                            suggestion=remediation_suggestion(failure.category, provider_name),
+                        )
+                    return OpenAIForwardResult(
+                        ok=False,
+                        provider=provider_name,
+                        model=normalized_model_id,
+                        status=502,
+                        headers={},
+                        body=b'',
+                        error=str(exc),
+                        category=failure.category,
+                        suggestion=remediation_suggestion(failure.category, provider_name),
+                    )
+                upsert_health(provider_name, normalized_model_id, True, path=self.health_path)
+                return OpenAIForwardResult(
+                    ok=True,
+                    provider=provider_name,
+                    model=normalized_model_id,
+                    status=status,
+                    headers={'Content-Type': 'application/json; charset=utf-8'},
+                    body=body,
+                )
             upsert_health(provider_name, normalized_model_id, True, path=self.health_path)
-            if upstream_stream:
-                return OpenAIForwardResult(ok=True, provider=provider_name, model=normalized_model_id, status=status, headers=headers, body=None, stream_chunks=stream_iter)
-            return OpenAIForwardResult(ok=True, provider=provider_name, model=normalized_model_id, status=status, headers=headers, body=body)
+            return OpenAIForwardResult(ok=True, provider=provider_name, model=normalized_model_id, status=status, headers=headers, body=None, stream_chunks=stream_iter)
 
-        error_body = b''.join(bytes(chunk) for chunk in stream_iter if chunk) if upstream_stream else body
+        try:
+            error_body = b''.join(bytes(chunk) for chunk in stream_iter if chunk)
+        except Exception as exc:
+            error_body = str(exc).encode('utf-8')
         text = error_body.decode('utf-8', errors='ignore')
         failure = classify_error(status, text)
         upsert_health(provider_name, normalized_model_id, False, reason=failure.category, path=self.health_path)
@@ -557,7 +594,7 @@ class ProxyService:
             model=normalized_model_id,
             status=status,
             headers=headers,
-            body=error_body if upstream_stream else b'',
+            body=error_body,
             error=text or f'upstream status {status}',
             category=failure.category,
             suggestion=remediation_suggestion(failure.category, provider_name),
