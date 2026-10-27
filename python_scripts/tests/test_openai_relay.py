@@ -12,6 +12,38 @@ from python_scripts.request_normalizer import ChatRequest
 from python_scripts.token_policy import response_token_budget
 
 
+def _gemini_sse_event(text: str, finish_reason: str | None = None) -> bytes:
+    candidate: dict[str, object] = {'content': {'role': 'model', 'parts': [{'text': text}]}}
+    if finish_reason is not None:
+        candidate['finishReason'] = finish_reason
+    payload = json.dumps({'candidates': [candidate]}, ensure_ascii=False, separators=(',', ':'))
+    return f'data: {payload}\n\n'.encode('utf-8')
+
+
+def _gemini_chat_request(stream: bool) -> ChatRequest:
+    return ChatRequest(
+        'free-proxy/auto',
+        'gemini/gemini-2.0-flash',
+        [{'role': 'user', 'content': 'hi'}],
+        stream,
+        None,
+        None,
+        {
+            'model': 'free-proxy/auto',
+            'requested_model': 'gemini/gemini-2.0-flash',
+            'messages': [{'role': 'user', 'content': 'hi'}],
+            'stream': stream,
+        },
+    )
+
+
+def _parse_sse_chunk(chunk: bytes) -> object:
+    data = chunk.decode('utf-8').removeprefix('data: ').strip()
+    if data == '[DONE]':
+        return '[DONE]'
+    return json.loads(data)
+
+
 class FakeAdapter:
     def __init__(self) -> None:
         self.calls = 0
@@ -650,24 +682,135 @@ class OpenAIRelayTests(unittest.TestCase):
         relay.handle_chat(request)
         self.assertEqual(stream_values, [True])
 
-    def test_payload_for_candidate_keeps_gemini_non_streaming(self) -> None:
+    def test_payload_for_candidate_streams_gemini_without_changing_openai_assignment(self) -> None:
         relay = OpenAIRelay(
             adapter_factory=lambda provider: FakeAdapter(),
             health_loader=lambda: {},
             health_ttl_seconds=60,
-            configured_providers_loader=lambda: ['gemini'],
+            configured_providers_loader=lambda: ['groq', 'gemini'],
         )
         request = ChatRequest(
             'free-proxy/auto',
             None,
             [{'role': 'user', 'content': 'hi'}],
-            True,
+            False,
             None,
             None,
-            {'model': 'auto', 'messages': [{'role': 'user', 'content': 'hi'}], 'stream': True},
+            {'model': 'auto', 'messages': [{'role': 'user', 'content': 'hi'}], 'stream': False},
         )
-        payload = relay._payload_for_candidate('gemini', 'gemini-2.0-flash', request)
-        self.assertIs(payload['stream'], False)
+        openai_payload = relay._payload_for_candidate('groq', 'llama-3.1-8b-instant', request)
+        gemini_payload = relay._payload_for_candidate('gemini', 'gemini-2.0-flash', request)
+        self.assertIs(openai_payload['stream'], True)
+        self.assertIs(gemini_payload['stream'], True)
+
+    def test_relay_maps_gemini_sse_when_client_streams(self) -> None:
+        calls: list[tuple[str, str, object]] = []
+        consumed = {'n': 0}
+        hel = _gemini_sse_event('hel')
+        lo = _gemini_sse_event('lo', 'STOP')
+
+        def events():
+            consumed['n'] += 1
+            yield hel
+            consumed['n'] += 1
+            yield lo
+
+        class Adapter:
+            def __init__(self, provider: str) -> None:
+                self.provider = provider
+
+            def forward_chat(self, payload: dict[str, object]):
+                calls.append((self.provider, str(payload.get('model', '')), payload.get('stream')))
+                if self.provider == 'gemini':
+                    return type('AdapterResponse', (), {'status': 200, 'headers': {'Content-Type': 'text/event-stream'}, 'body': None, 'stream': events(), 'content_type': 'text/event-stream'})()
+                return type('AdapterResponse', (), {'status': 200, 'headers': {'Content-Type': 'application/json'}, 'body': b'{"choices":[{"message":{"content":"from-github"}}]}', 'stream': None, 'content_type': 'application/json'})()
+
+        relay = OpenAIRelay(
+            adapter_factory=lambda provider: Adapter(provider),
+            health_loader=lambda: {},
+            health_ttl_seconds=60,
+            configured_providers_loader=lambda: ['gemini', 'github'],
+        )
+        response = relay.handle_chat(_gemini_chat_request(stream=True))
+
+        self.assertEqual(response.status, 200)
+        self.assertEqual(calls, [('gemini', 'gemini-2.0-flash', True)])
+        self.assertEqual(consumed['n'], 0)
+        self.assertIsNone(response.body)
+        self.assertIn('text/event-stream', response.headers.get('Content-Type', ''))
+        parsed = [_parse_sse_chunk(chunk) for chunk in list(response.stream_chunks or [])]
+        self.assertEqual(consumed['n'], 2)
+        self.assertEqual(calls, [('gemini', 'gemini-2.0-flash', True)])
+        self.assertEqual(
+            [
+                (item['choices'][0]['delta'].get('content'), item['choices'][0]['finish_reason'])
+                for item in parsed
+                if item != '[DONE]'
+            ],
+            [('hel', None), ('lo', None), (None, 'stop')],
+        )
+        self.assertEqual(parsed[-1], '[DONE]')
+
+    def test_relay_collects_gemini_sse_into_json_when_client_does_not_stream(self) -> None:
+        calls: list[str] = []
+
+        class Adapter:
+            def __init__(self, provider: str) -> None:
+                self.provider = provider
+
+            def forward_chat(self, payload: dict[str, object]):
+                calls.append(self.provider)
+                self.stream_flag = payload.get('stream')
+                if self.provider == 'gemini':
+                    return type('AdapterResponse', (), {'status': 200, 'headers': {}, 'body': None, 'stream': iter([_gemini_sse_event('hel'), _gemini_sse_event('lo', 'STOP')]), 'content_type': 'text/event-stream'})()
+                return type('AdapterResponse', (), {'status': 200, 'headers': {}, 'body': b'{"choices":[{"message":{"content":"from-github"}}]}', 'stream': None, 'content_type': 'application/json'})()
+
+        relay = OpenAIRelay(
+            adapter_factory=lambda provider: Adapter(provider),
+            health_loader=lambda: {},
+            health_ttl_seconds=60,
+            configured_providers_loader=lambda: ['gemini', 'github'],
+        )
+        response = relay.handle_chat(_gemini_chat_request(stream=False))
+
+        self.assertEqual(calls, ['gemini'])
+        self.assertIsNone(response.stream_chunks)
+        self.assertIn('application/json', response.headers.get('Content-Type', ''))
+        parsed = json.loads(response.body or b'{}')
+        self.assertEqual(parsed['object'], 'chat.completion')
+        self.assertEqual(parsed['model'], 'gemini/gemini-2.0-flash')
+        self.assertEqual(parsed['choices'][0]['message']['role'], 'assistant')
+        self.assertEqual(parsed['choices'][0]['message']['content'], 'hello')
+        self.assertEqual(parsed['choices'][0]['finish_reason'], 'stop')
+
+    def test_relay_falls_back_when_gemini_http_500_sse_is_not_success(self) -> None:
+        calls: list[str] = []
+
+        class Adapter:
+            def __init__(self, provider: str) -> None:
+                self.provider = provider
+
+            def forward_chat(self, payload: dict[str, object]):
+                del payload
+                calls.append(self.provider)
+                if self.provider == 'gemini':
+                    return type('AdapterResponse', (), {'status': 500, 'headers': {'Content-Type': 'text/event-stream'}, 'body': None, 'stream': iter([b'data: {"error":{"message":"gemini-broke"}}\n\n']), 'content_type': 'text/event-stream'})()
+                return type('AdapterResponse', (), {'status': 200, 'headers': {'Content-Type': 'application/json'}, 'body': b'{"choices":[{"message":{"content":"from-github"}}]}', 'stream': None, 'content_type': 'application/json'})()
+
+        relay = OpenAIRelay(
+            adapter_factory=lambda provider: Adapter(provider),
+            health_loader=lambda: {},
+            health_ttl_seconds=60,
+            configured_providers_loader=lambda: ['gemini', 'github'],
+        )
+        response = relay.handle_chat(_gemini_chat_request(stream=True))
+
+        self.assertEqual(response.status, 200)
+        self.assertEqual(calls[0], 'gemini')
+        self.assertIn('github', calls)
+        joined = b''.join(list(response.stream_chunks or []))
+        self.assertIn(b'from-github', joined)
+        self.assertNotIn(b'gemini-broke', joined)
 
     def test_relay_passes_upstream_sse_through_and_does_not_call_next_provider(self) -> None:
         calls: list[tuple[str, str]] = []

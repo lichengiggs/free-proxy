@@ -6,6 +6,7 @@ import time
 import unittest
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from unittest.mock import patch
+from urllib.parse import parse_qs, urlsplit
 
 from python_scripts.errors import classify_error
 from python_scripts.provider_adapter import ProviderAdapter
@@ -53,6 +54,39 @@ class StreamingTransport:
                 b'data: [DONE]\n\n',
             ]),
         )
+
+
+class GeminiForwardTransport:
+    def __init__(self, status: int = 200) -> None:
+        self.status = status
+        self.request_calls = 0
+        self.calls: list[tuple[str, str, dict[str, str] | None, bytes | None]] = []
+
+    def request(
+        self,
+        method: str,
+        url: str,
+        headers: dict[str, str] | None = None,
+        body: bytes | None = None,
+        timeout: int = 30,
+    ) -> tuple[int, dict[str, str], bytes]:
+        del method, url, headers, body, timeout
+        self.request_calls += 1
+        raise AssertionError('gemini forward_chat must not use request()')
+
+    def stream_request(
+        self,
+        method: str,
+        url: str,
+        headers: dict[str, str] | None = None,
+        body: bytes | None = None,
+        timeout: int = 30,
+    ) -> tuple[int, dict[str, str], object]:
+        del timeout
+        self.calls.append((method, url, headers, body))
+        if self.status >= 400:
+            return self.status, {'content-type': 'application/json'}, iter([b'{"error":{"message":"gemini-broke"}}'])
+        return self.status, {'content-type': 'text/event-stream'}, iter([b''])
 
 
 class ClientTests(unittest.TestCase):
@@ -414,6 +448,84 @@ class ClientTests(unittest.TestCase):
         adapter = ProviderAdapter(provider=provider, api_key='x', transport=transport)
         self.assertEqual(adapter.list_models(), ['gemini-2.0-flash'])
         self.assertEqual(adapter.chat_text('models/gemini-2.0-flash', 'ok'), 'ok')
+
+    def test_gemini_chat_text_stays_on_generate_content(self) -> None:
+        provider = get_provider('gemini')
+
+        class Transport(FakeTransport):
+            def __init__(self) -> None:
+                super().__init__({
+                    ('POST', 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent'): (
+                        200,
+                        {},
+                        json.dumps({'candidates': [{'content': {'parts': [{'text': 'ok'}]}}]}).encode(),
+                    ),
+                })
+                self.stream_calls = 0
+
+            def stream_request(
+                self,
+                method: str,
+                url: str,
+                headers: dict[str, str] | None = None,
+                body: bytes | None = None,
+                timeout: int = 30,
+            ) -> tuple[int, dict[str, str], object]:
+                del method, url, headers, body, timeout
+                self.stream_calls += 1
+                raise AssertionError('chat_text must not call stream_request')
+
+        transport = Transport()
+        adapter = ProviderAdapter(provider=provider, api_key='test-gemini-key', transport=transport, request_timeout_seconds=7)
+        self.assertEqual(adapter.chat_text('models/gemini-2.0-flash', 'ok'), 'ok')
+        self.assertEqual(transport.stream_calls, 0)
+        method, url, headers, _body, timeout = transport.requests[-1]
+        path = urlsplit(url).path
+        self.assertEqual(method, 'POST')
+        self.assertTrue(path.endswith(':generateContent'))
+        self.assertFalse(path.endswith(':streamGenerateContent'))
+        self.assertEqual(timeout, 7)
+        self.assertEqual(headers.get('x-goog-api-key') if headers else None, 'test-gemini-key')
+        self.assertNotIn('test-gemini-key', url)
+
+    def test_gemini_forward_chat_uses_stream_generate_content(self) -> None:
+        provider = get_provider('gemini')
+        transport = GeminiForwardTransport()
+        adapter = ProviderAdapter(provider=provider, api_key='test-gemini-key', transport=transport)
+        response = adapter.forward_chat({
+            'model': 'models/gemini-2.0-flash',
+            'messages': [{'role': 'user', 'content': 'hello'}],
+            'max_tokens': 128,
+            'stream': False,
+        })
+
+        self.assertEqual(response.status, 200)
+        self.assertIsNone(response.body)
+        self.assertIsNotNone(response.stream)
+        self.assertEqual(transport.request_calls, 0)
+        method, url, headers, body = transport.calls[-1]
+        parts = urlsplit(url)
+        self.assertEqual(method, 'POST')
+        self.assertTrue(parts.path.endswith('/models/gemini-2.0-flash:streamGenerateContent'))
+        self.assertEqual(parse_qs(parts.query), {'alt': ['sse']})
+        self.assertNotIn('test-gemini-key', url)
+        self.assertEqual(headers.get('x-goog-api-key') if headers else None, 'test-gemini-key')
+        self.assertNotIn('Authorization', headers or {})
+        payload = json.loads(body or b'{}')
+        self.assertEqual(payload, {
+            'contents': [{'role': 'user', 'parts': [{'text': 'hello'}]}],
+            'generationConfig': {'temperature': 0, 'maxOutputTokens': 128},
+        })
+
+    def test_gemini_forward_chat_puts_http_error_in_body(self) -> None:
+        provider = get_provider('gemini')
+        transport = GeminiForwardTransport(status=500)
+        adapter = ProviderAdapter(provider=provider, api_key='test-gemini-key', transport=transport)
+        response = adapter.forward_chat({'model': 'gemini-2.0-flash', 'prompt': 'hello'})
+
+        self.assertEqual(response.status, 500)
+        self.assertIsNone(response.stream)
+        self.assertIn(b'gemini-broke', response.body or b'')
 
     def test_gemini_excludes_image_vision_and_embedding_models(self) -> None:
         provider = get_provider('gemini')

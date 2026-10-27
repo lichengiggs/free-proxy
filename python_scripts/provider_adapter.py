@@ -38,6 +38,18 @@ def retry_after_from_headers(headers: dict[str, str] | None) -> str | None:
     return None
 
 
+def _join_stream_chunks(chunks: Iterable[bytes] | None) -> bytes:
+    if chunks is None:
+        return b''
+    parts: list[bytes] = []
+    for chunk in chunks:
+        if isinstance(chunk, memoryview):
+            chunk = chunk.tobytes()
+        if isinstance(chunk, (bytes, bytearray)) and chunk:
+            parts.append(bytes(chunk))
+    return b''.join(parts)
+
+
 @dataclass
 class ProviderAdapter:
     provider: ProviderMeta
@@ -125,6 +137,53 @@ class ProviderAdapter:
             return status, headers, json.loads(text)
         except json.JSONDecodeError:
             return status, headers, text
+
+    def _stream_request(
+        self,
+        method: str,
+        path: str,
+        payload: JsonObject | None = None,
+        query: dict[str, str] | None = None,
+        timeout: int | None = None,
+    ) -> tuple[int, dict[str, str], Iterable[bytes]]:
+        raw_body = json.dumps(payload, ensure_ascii=False).encode('utf-8') if payload is not None else None
+        timeout_value = timeout if timeout is not None else self.request_timeout_seconds
+        if self.debug_log is not None:
+            self.debug_log(
+                'upstream_request',
+                provider=self.provider.name,
+                model=payload.get('model') if isinstance(payload, dict) else 'none',
+                timeout_s=timeout_value,
+                auth_present=True,
+                auth_scheme='x-goog-api-key' if self.provider.format == 'gemini' else 'Bearer',
+                upstream_path=path,
+                query_keys=','.join(sorted(query.keys())) if query else 'none',
+            )
+        started_at = time.time()
+        try:
+            self._reserve_request_slot()
+            status, headers, chunks = self.transport.stream_request(
+                method,
+                build_url(self.provider.base_url, path, query),
+                self._headers(),
+                raw_body,
+                timeout_value,
+            )
+        except TimeoutError as exc:
+            raise ProviderError(f'网络连接失败: {exc}') from exc
+        elapsed_ms = int((time.time() - started_at) * 1000)
+        if self.debug_log is not None:
+            self.debug_log(
+                'upstream_response',
+                provider=self.provider.name,
+                model=payload.get('model') if isinstance(payload, dict) else 'none',
+                status=status,
+                elapsed_ms=elapsed_ms,
+                content_type=headers.get('content-type', headers.get('Content-Type', '')) if isinstance(headers, dict) else '',
+                cf_ray=headers.get('cf-ray', 'none') if isinstance(headers, dict) else 'none',
+                retry_after=headers.get('retry-after', 'none') if isinstance(headers, dict) else 'none',
+            )
+        return status, headers, chunks
 
     def list_models(self) -> list[str]:
         status, _, data = self._request_json('GET', '/models', query=get_provider_required_query(self.provider.name))
@@ -264,11 +323,21 @@ class ProviderAdapter:
                 'contents': [{'role': 'user', 'parts': [{'text': prompt}]}],
                 'generationConfig': {'temperature': 0, 'maxOutputTokens': token_limit},
             }
-            path = f'/models/{self.normalize_model_id(str(payload.get("model", "")))}:generateContent'
-            status, headers, data = self._request_json('POST', path, request_payload, timeout=self._request_timeout_seconds_for_model(str(payload.get('model', ''))))
-            body = json.dumps(data, ensure_ascii=False).encode('utf-8') if not isinstance(data, str) else data.encode('utf-8')
-            merged_headers = {'Content-Type': 'application/json; charset=utf-8', **headers}
-            return AdapterResponse(status, merged_headers, body, None, 'application/json; charset=utf-8', retry_after_from_headers(headers))
+            model_id = self.normalize_model_id(str(payload.get('model', '')))
+            path = f'/models/{model_id}:streamGenerateContent'
+            status, headers, chunks = self._stream_request(
+                'POST',
+                path,
+                request_payload,
+                query={'alt': 'sse'},
+                timeout=self._request_timeout_seconds_for_model(model_id),
+            )
+            if status >= 400:
+                error_body = _join_stream_chunks(chunks)
+                content_type = str(headers.get('Content-Type') or headers.get('content-type') or 'application/json; charset=utf-8')
+                return AdapterResponse(status, headers, error_body, None, content_type, retry_after_from_headers(headers))
+            content_type = str(headers.get('Content-Type') or headers.get('content-type') or 'text/event-stream; charset=utf-8')
+            return AdapterResponse(status, headers, None, chunks, content_type, retry_after_from_headers(headers))
 
         raise ProviderError('provider format is not supported')
 
