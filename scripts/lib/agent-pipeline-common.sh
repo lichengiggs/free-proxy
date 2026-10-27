@@ -344,6 +344,61 @@ def cmd_checks_gate(acceptance_path, verdict_path, head):
     return 0
 
 
+def cmd_check_required(acceptance_path, name):
+    if name not in CHECK_NAMES:
+        sys.stderr.write("unknown check: %s\n" % name)
+        return 2
+    text = read_text(acceptance_path) if os.path.isfile(acceptance_path) else ""
+    required = required_from_acceptance(text)
+    sys.stdout.write("yes" if required[name] else "no")
+    return 0
+
+
+def cmd_quality_gate(log_path, base_count, work_count, base_hash, work_hash):
+    problems = []
+    try:
+        base_n = int(base_count)
+        work_n = int(work_count)
+    except ValueError:
+        problems.append("count")
+        base_n = 0
+        work_n = 0
+    text = read_text(log_path) if os.path.isfile(log_path) else ""
+    if not re.search(r"(?m)^OK$", text):
+        problems.append("log")
+    if work_n < base_n:
+        problems.append("count")
+    if not base_hash or not work_hash or base_hash != work_hash:
+        problems.append("contract")
+    if "test_public_contract" not in text:
+        problems.append("contract-ran")
+    if not re.search(r"test_process_stream_reaches_done.*\.\.\. ok", text):
+        problems.append("process")
+    if not re.search(r"test_console_journey.*\.\.\. ok", text):
+        problems.append("console")
+    if problems:
+        sys.stdout.write("stop\n" + "\n".join(problems) + "\n")
+        return 0
+    sys.stdout.write("pass\n")
+    return 0
+
+
+def cmd_surface_gate(acceptance_path, log_path):
+    text = read_text(acceptance_path) if os.path.isfile(acceptance_path) else ""
+    log = read_text(log_path) if os.path.isfile(log_path) else ""
+    required = required_from_acceptance(text)
+    missing = []
+    if required["console/SSE"] and not re.search(r"test_console_journey.*\.\.\. ok", log):
+        missing.append("console/SSE")
+    if required["live provider"] and not re.search(r"(?m)^live provider: ok$", log):
+        missing.append("live provider")
+    if missing:
+        sys.stdout.write("stop\n" + "\n".join(missing) + "\n")
+        return 0
+    sys.stdout.write("pass\n")
+    return 0
+
+
 def cmd_lesson_status(path, today):
     import datetime
 
@@ -487,6 +542,9 @@ def main(argv):
         "notes": (cmd_notes, 1),
         "checks-block": (cmd_checks_block, 1),
         "checks-gate": (cmd_checks_gate, 3),
+        "check-required": (cmd_check_required, 2),
+        "quality-gate": (cmd_quality_gate, 5),
+        "surface-gate": (cmd_surface_gate, 2),
         "lesson-status": (cmd_lesson_status, 2),
         "match-prs": (cmd_match_prs, 2),
         "classify-checks": (cmd_classify_checks, 1),
@@ -749,19 +807,129 @@ agent_pipeline_invoke() {
   esac
 }
 
-agent_pipeline_run_project_tests() {
-  local wt="$1" log="$2"
-  mkdir -p "$(dirname "$log")"
-  if [[ ! -d "$wt/python_scripts/tests" ]]; then
-    printf '%s\n' "no python_scripts/tests directory; local test gate skipped" | tee "$log"
+# Count `def test_` methods. rev empty means the working tree.
+# A missing tree or no matches is 0, not an error.
+agent_pipeline_count_test_defs() {
+  local repo="$1" rev="${2:-}"
+  local out
+  if [[ -n "$rev" ]]; then
+    if ! out=$(git -C "$repo" grep -h -E '^[[:space:]]*(async[[:space:]]+)?def test_' "$rev" -- python_scripts/tests 2>/dev/null); then
+      printf '0\n'
+      return 0
+    fi
+  else
+    if ! out=$(grep -R -h -E '^[[:space:]]*(async[[:space:]]+)?def test_' "$repo/python_scripts/tests" --include 'test_*.py' 2>/dev/null); then
+      printf '0\n'
+      return 0
+    fi
+  fi
+  printf '%s\n' "$out" | wc -l | tr -d '[:space:]'
+  printf '\n'
+}
+
+# Blob hash of the public contract test. rev empty hashes the working tree.
+# Prints an empty line when the file is absent.
+agent_pipeline_contract_hash() {
+  local repo="$1" rev="${2:-}"
+  local rel="python_scripts/tests/test_public_contract.py"
+  if [[ -n "$rev" ]]; then
+    git -C "$repo" rev-parse "${rev}:${rel}"
+    return
+  fi
+  if [[ ! -f "$repo/$rel" ]]; then
+    printf '\n'
     return 0
   fi
-  # TODO: other stacks can add a command here. This repo's agreed check is unittest.
-  if command -v uv >/dev/null 2>&1; then
-    (cd "$wt" && uv run python -m unittest discover -s python_scripts/tests -p 'test_*.py') >"$log" 2>&1
-  else
-    (cd "$wt" && python3 -m unittest discover -s python_scripts/tests -p 'test_*.py') >"$log" 2>&1
+  git -C "$repo" hash-object "$rel"
+}
+
+# Prints the live-provider smoke report. Always returns 0.
+# AGENT_PIPELINE_LIVE_PROVIDER=0 skips the network call.
+agent_pipeline_live_provider_report() {
+  local repo="$1"
+  local log rc
+  if [[ "${AGENT_PIPELINE_LIVE_PROVIDER:-1}" == "0" ]]; then
+    printf 'live provider: skipped by environment\n'
+    return 0
   fi
+  log=$(mktemp)
+  set +e
+  if command -v uv >/dev/null 2>&1; then
+    (cd "$repo" && uv run python scripts/check_live_provider.py) >"$log" 2>&1
+  else
+    (cd "$repo" && python3 scripts/check_live_provider.py) >"$log" 2>&1
+  fi
+  rc=$?
+  set -e
+  printf 'exit %s\n' "$rc"
+  cat "$log"
+  rm -f "$log"
+  return 0
+}
+
+# Run unittest -v, then refuse a missing suite, a dropped test count, a changed
+# public contract file, or a required live-provider check that did not pass.
+# base is the branch already fetched as origin/<base>. acceptance may be empty.
+agent_pipeline_run_project_tests() {
+  local wt="$1" log="$2" base="${3:-}" acceptance="${4:-}"
+  local unit_rc gate gate_status surface surface_status
+  local base_count work_count base_hash work_hash need_live
+  mkdir -p "$(dirname "$log")"
+  if [[ ! -d "$wt/python_scripts/tests" ]]; then
+    printf '%s\n' "missing python_scripts/tests; local test gate failed" | tee "$log"
+    return 1
+  fi
+  if [[ -z "$base" ]]; then
+    base=$(git -C "$wt" symbolic-ref --short refs/remotes/origin/HEAD 2>/dev/null || true)
+    base=${base#origin/}
+  fi
+  if [[ -z "$base" ]]; then
+    printf '%s\n' "quality gate could not resolve the base branch" | tee "$log"
+    return 1
+  fi
+  set +e
+  if command -v uv >/dev/null 2>&1; then
+    (cd "$wt" && uv run python -m unittest discover -s python_scripts/tests -p 'test_*.py' -v) >"$log" 2>&1
+  else
+    (cd "$wt" && python3 -m unittest discover -s python_scripts/tests -p 'test_*.py' -v) >"$log" 2>&1
+  fi
+  unit_rc=$?
+  set -e
+  base_count=$(agent_pipeline_count_test_defs "$wt" "origin/${base}")
+  work_count=$(agent_pipeline_count_test_defs "$wt")
+  if ! base_hash=$(git -C "$wt" rev-parse "origin/${base}:python_scripts/tests/test_public_contract.py" 2>/dev/null); then
+    base_hash=""
+  fi
+  work_hash=$(agent_pipeline_contract_hash "$wt")
+  gate=$(agent_pipeline_py quality-gate "$log" "$base_count" "$work_count" "$base_hash" "$work_hash")
+  gate_status=$(printf '%s\n' "$gate" | head -n 1)
+  need_live="no"
+  if [[ "$unit_rc" -eq 0 && "$gate_status" == "pass" && -n "$acceptance" && -f "$acceptance" ]]; then
+    need_live=$(agent_pipeline_py check-required "$acceptance" "live provider")
+  fi
+  if [[ "$need_live" == "yes" ]]; then
+    {
+      printf '\n## live provider\n'
+      agent_pipeline_live_provider_report "$wt"
+    } | tee -a "$log" >/dev/null
+  fi
+  if [[ -n "$acceptance" && -f "$acceptance" ]]; then
+    surface=$(agent_pipeline_py surface-gate "$acceptance" "$log")
+  else
+    surface="pass"
+  fi
+  surface_status=$(printf '%s\n' "$surface" | head -n 1)
+  if [[ "$unit_rc" -ne 0 || "$gate_status" != "pass" || "$surface_status" != "pass" ]]; then
+    {
+      printf '\nlocal test gate failed\n'
+      printf 'unittest_exit=%s\n' "$unit_rc"
+      printf 'quality_gate:\n%s\n' "$gate"
+      printf 'surface_gate:\n%s\n' "$surface"
+      printf 'test_defs base=%s work=%s\n' "$base_count" "$work_count"
+    } | tee -a "$log" >/dev/null
+    return 1
+  fi
+  return 0
 }
 
 agent_pipeline_remove_worktree() {

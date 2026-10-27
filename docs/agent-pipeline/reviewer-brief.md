@@ -10,6 +10,8 @@
 - 测试是否通过，以交接材料里的测试日志为准。日志写失败，就不要当成通过。
 - 审查前读 `LESSONS.md` 的「仍有效」。diff 违反其中某条规则时，按那条规则判。
 - diff 推翻 `AGENTS.md` 里标了「长期有效」的约定时，写 `REJECT`，不要写 `FIX`。这包括公开接口、模型别名、`coding` 必须返回 400 且不静默回退、relay 主链路，以及 probe 和 chat 的输出预算必须分开。
+- diff 碰到 `python_scripts/tests/test_public_contract.py` 时写 `REJECT`，不要写 `FIX`。
+- 新测试没有把 Acceptance 写成断言时，写 `FIX`。只断言函数被调用了，不算做到。
 - 不要自己动手改代码。
 
 ## 权限
@@ -39,6 +41,10 @@ live provider: not run
 本地测试日志是通过时，`unit` 写成 `ran <head>`。日志是失败时，不要写 `ACCEPT`。脚本已经跑过的 unittest 不要写成 `not run`。
 
 `console/SSE` 和 `live provider` 没有在日志或 diff 里留下这次 Head 上的运行记录时，写成 `not run`。
+
+测试日志里有 `test_console_journey` 且这一行以 `ok` 结束时，Acceptance 若写了 `console/SSE: required`，把 `console/SSE` 写成 `ran <head>`。没有这条 ok 记录就不要写 `ACCEPT`。
+
+Acceptance 写了 `live provider: required` 时，日志里要有单独一行 `live provider: ok` 才能把该项写成 `ran <head>`。`skipped` 不算跑过。
 
 Acceptance 里某一行写成 `console/SSE: required` 或 `live provider: required` 时，该项是 `not run` 就不要写 `ACCEPT`。没写这些行时，这两项可以是 `not run`。`unit` 默认必查；只有 Acceptance 里写了 `unit: not required` 才允许 `unit: not run`。
 

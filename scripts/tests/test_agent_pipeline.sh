@@ -261,11 +261,67 @@ agent_pipeline_state_put "$state_file" status needs_fix
 assert_eq "状态可更新" "$(agent_pipeline_state_get "$state_file" status)" "needs_fix"
 assert_eq "其他键还在" "$(agent_pipeline_state_get "$state_file" fix_rounds)" "1"
 
-AGENT_PIPELINE_STATE_DIR="$TMP/night-state" "$ROOT/scripts/agent-night-review.sh" --packet --date 2026-10-27 >/dev/null
-if [[ -f "$TMP/night-state/night-review/2026-10-27.md" ]] && grep -q "夜审" "$TMP/night-state/night-review/2026-10-27.md"; then
+AGENT_PIPELINE_LIVE_PROVIDER=0 AGENT_PIPELINE_STATE_DIR="$TMP/night-state" "$ROOT/scripts/agent-night-review.sh" --packet --date 2026-10-27 >/dev/null
+packet="$TMP/night-state/night-review/2026-10-27.md"
+if [[ -f "$packet" ]] && grep -q "夜审" "$packet" && grep -q "契约文件" "$packet" && grep -q "live provider: skipped by environment" "$packet"; then
   printf 'ok 夜审证据包\n'
 else
   printf 'FAIL 夜审证据包\n' >&2
+  FAIL=1
+fi
+
+cat > "$TMP/unit-ok.log" <<'EOF'
+test_console_journey_probe_chat_and_diagnostics (python_scripts.tests.test_public_contract.PublicContractTests.test_console_journey_probe_chat_and_diagnostics) ... ok
+test_process_stream_reaches_done (python_scripts.tests.test_public_contract.ProcessStreamContractTests.test_process_stream_reaches_done) ... ok
+----------------------------------------------------------------------
+Ran 2 tests in 0.1s
+
+OK
+EOF
+assert_eq "质量闸门通过" "$(agent_pipeline_py quality-gate "$TMP/unit-ok.log" 2 2 abcdef abcdef)" "pass"
+dropped=$(agent_pipeline_py quality-gate "$TMP/unit-ok.log" 3 2 abcdef abcdef)
+assert_eq "用例变少不能过" "${dropped%%$'\n'*}" "stop"
+changed=$(agent_pipeline_py quality-gate "$TMP/unit-ok.log" 2 2 abcdef 123456)
+assert_eq "契约文件变了不能过" "${changed%%$'\n'*}" "stop"
+printf '%s\n' "FAILED" > "$TMP/unit-bad.log"
+bad_log=$(agent_pipeline_py quality-gate "$TMP/unit-bad.log" 2 2 abcdef abcdef)
+assert_eq "日志没有 OK 不能过" "${bad_log%%$'\n'*}" "stop"
+
+printf '%s\n' "console/SSE: required" > "$TMP/need-console.txt"
+console_gate=$(agent_pipeline_py surface-gate "$TMP/need-console.txt" "$TMP/unit-bad.log")
+assert_eq "点名的控制台旅程没在日志里" "${console_gate%%$'\n'*}" "stop"
+console_ok=$(agent_pipeline_py surface-gate "$TMP/need-console.txt" "$TMP/unit-ok.log")
+assert_eq "日志里的控制台旅程可以过" "$console_ok" "pass"
+printf '%s\n' "live provider: required" > "$TMP/need-live.txt"
+printf '%s\n' "live provider: skipped no key" > "$TMP/live-skip.log"
+live_skip=$(agent_pipeline_py surface-gate "$TMP/need-live.txt" "$TMP/live-skip.log")
+assert_eq "跳过真实 provider 不算跑过" "${live_skip%%$'\n'*}" "stop"
+printf '%s\n' "live provider: ok" > "$TMP/live-ok.log"
+assert_eq "真实 provider 通过" "$(agent_pipeline_py surface-gate "$TMP/need-live.txt" "$TMP/live-ok.log")" "pass"
+assert_eq "默认不要求 live" "$(agent_pipeline_py check-required "$TMP/acceptance-plain.txt" "live provider")" "no"
+assert_eq "点名后要求 live" "$(agent_pipeline_py check-required "$TMP/need-live.txt" "live provider")" "yes"
+
+defs=$(agent_pipeline_count_test_defs "$ROOT")
+if [[ "$defs" -gt 0 ]]; then
+  printf 'ok 工作区测试方法计数\n'
+else
+  printf 'FAIL 工作区测试方法计数\n' >&2
+  FAIL=1
+fi
+assert_eq "契约哈希等于工作区文件" \
+  "$(agent_pipeline_contract_hash "$ROOT")" \
+  "$(git -C "$ROOT" hash-object python_scripts/tests/test_public_contract.py)"
+
+empty_repo=$(mktemp -d)
+set +e
+agent_pipeline_run_project_tests "$empty_repo" "$TMP/missing-tests.log" main
+missing_rc=$?
+set -e
+assert_eq "没有测试目录时失败" "$missing_rc" "1"
+if grep -q "missing python_scripts/tests" "$TMP/missing-tests.log"; then
+  printf 'ok 缺失测试目录写进日志\n'
+else
+  printf 'FAIL 缺失测试目录写进日志\n' >&2
   FAIL=1
 fi
 

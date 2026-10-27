@@ -15,7 +15,9 @@ labels: []
      需要控制台、SSE 或真实 provider 时，另起一行写：
      console/SSE: required
      live provider: required
-     不写这两行时，审查可以声明它们 not run。unit 默认 required。 -->
+     不写这两行时，审查可以声明它们 not run。unit 默认 required。
+     console/SSE 看 unittest 日志里的 test_console_journey。
+     live provider 会额外调用真实上游，日志里要有 live provider: ok。 -->
 
 ## Surface
 

@@ -19,6 +19,8 @@ usage() {
 用法: scripts/agent-night-review.sh [--check] [--packet] [--lessons 文件] [--date YYYY-MM-DD]
 
 核对 LESSONS.md，并写出当天的证据包。不调用 agent，不改仓库。
+证据包会记下公开契约文件当天有没有被修改，以及一次真实 provider 冒烟。
+AGENT_PIPELINE_LIVE_PROVIDER=0 时跳过冒烟，不访问网络。
 
 不带 --check / --packet 时，两件事都做。
 --check    打印仍有效条目里该升格、该归档或格式不对的行。有这类行时退出码为 2
@@ -132,6 +134,21 @@ if [[ "$PACKET" -eq 1 ]]; then
       --until="${NEXT_DATE} 00:00" \
       --pretty=format:'%h %ad %s' \
       --date=short || true
+    printf '\n\n## 契约文件\n\n'
+    contract_changes=$(git -C "$REPO" log \
+      --since="${DATE} 00:00" \
+      --until="${NEXT_DATE} 00:00" \
+      --pretty=format:'%h %ad %s' \
+      --date=short \
+      -- python_scripts/tests/test_public_contract.py || true)
+    if [[ -n "$contract_changes" ]]; then
+      printf '%s\n' "$contract_changes"
+      printf '\n人工改过公开契约。对照 Acceptance 看这次改动是否应该进 main。\n'
+    else
+      printf '今天没有改动 python_scripts/tests/test_public_contract.py。\n'
+    fi
+    printf '\n## 真实 provider 冒烟\n\n'
+    agent_pipeline_live_provider_report "$REPO"
     printf '\n\n## 本机审查记录\n\n'
     if [[ -d "$AGENT_PIPELINE_STATE_DIR/reviews" ]]; then
       find "$AGENT_PIPELINE_STATE_DIR/reviews" -type f \( -name '*.verdict' -o -name '*.tests.log' \) -print

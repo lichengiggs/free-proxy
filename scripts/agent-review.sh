@@ -335,7 +335,7 @@ only_status=$(printf '%s\n' "$only_result" | head -n 1)
 only_bad=$(printf '%s\n' "$only_result" | tail -n +2)
 
 set +e
-agent_pipeline_run_project_tests "$wt" "$test_log"
+agent_pipeline_run_project_tests "$wt" "$test_log" "$base_ref" "$WORKDIR/acceptance.txt"
 test_rc=$?
 set -e
 if [[ "$test_rc" -eq 0 ]]; then

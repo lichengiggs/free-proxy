@@ -20,6 +20,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     serve_cmd = sub.add_parser('serve', help='start HTTP backend')
     serve_cmd.add_argument('--debug', action='store_true')
+    serve_cmd.add_argument('--port', type=int, default=8765)
 
     list_cmd = sub.add_parser('models', help='list provider models')
     list_cmd.add_argument('--provider', required=True)
@@ -46,7 +47,7 @@ def main(argv: list[str] | None = None) -> int:
         uvicorn.run(
             'python_scripts.server_fastapi:app',
             host='127.0.0.1',
-            port=8765,
+            port=args.port,
             log_level=log_level,
         )
         return 0

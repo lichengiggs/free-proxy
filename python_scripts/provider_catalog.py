@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 import os
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Iterable, Literal
+from urllib.parse import urlsplit
+
+from .provider_errors import ProviderError
 
 
 FormatType = Literal['openai', 'gemini', 'anthropic']
@@ -89,11 +92,50 @@ PROVIDERS: tuple[ProviderMeta, ...] = (
 PROVIDER_MAP: dict[str, ProviderMeta] = {provider.name: provider for provider in PROVIDERS}
 
 
+def test_upstream_base_url() -> str | None:
+    """Return the loopback upstream override used by the contract process test.
+
+    Args:
+        None.
+
+    Returns:
+        ``FREE_PROXY_TEST_UPSTREAM`` without a trailing slash, or None when it is unset.
+
+    Raises:
+        ProviderError: The variable is set to a URL that is not ``http`` on
+        ``127.0.0.1`` or ``localhost``.
+    """
+    raw = os.environ.get('FREE_PROXY_TEST_UPSTREAM', '').strip()
+    if not raw:
+        return None
+    parsed = urlsplit(raw)
+    host = (parsed.hostname or '').lower()
+    if parsed.scheme != 'http' or host not in {'127.0.0.1', 'localhost'} or parsed.username or parsed.password:
+        raise ProviderError('FREE_PROXY_TEST_UPSTREAM must be http://127.0.0.1 or http://localhost')
+    return raw.rstrip('/')
+
+
 def get_provider(name: str) -> ProviderMeta:
+    """Return provider metadata, optionally pointed at the contract-test upstream.
+
+    Args:
+        name: Catalog provider name.
+
+    Returns:
+        The catalog record. When ``FREE_PROXY_TEST_UPSTREAM`` is a loopback HTTP
+        URL, ``base_url`` is that URL.
+
+    Raises:
+        KeyError: ``name`` is not in the catalog.
+        ProviderError: The test upstream variable is set to a non-loopback URL.
+    """
     provider = PROVIDER_MAP.get(name)
     if provider is None:
         raise KeyError(f'unknown provider: {name}')
-    return provider
+    override = test_upstream_base_url()
+    if override is None:
+        return provider
+    return replace(provider, base_url=override)
 
 
 def list_providers(names: Iterable[str] | None = None) -> list[ProviderMeta]:

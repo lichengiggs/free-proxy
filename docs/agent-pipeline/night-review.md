@@ -13,6 +13,11 @@ scripts/agent-night-review.sh --date 2026-10-27
 
 只看这一天已经进 main 的提交，以及本机 `.agent-pipeline` 里的审查裁决和 FIX 的 NOTES。
 
+另外记下两件已经发生的事，不因此改文件：
+
+- 当天有没有提交改过 `python_scripts/tests/test_public_contract.py`
+- `scripts/check_live_provider.py` 对 `.env` 里已有的 key 打了一次 `free-proxy/auto`。没有 key 就记跳过。`AGENT_PIPELINE_LIVE_PROVIDER=0` 不打网络。失败留在证据包里，不挡住这次夜审。
+
 只记三件事：
 
 - 修完又返工的

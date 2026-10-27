@@ -16,7 +16,7 @@ from .protocol_converter import iter_gemini_sse_as_openai_chunks
 from .response_normalizer import synthesize_openai_json_from_sse
 from .preferred_model_store import load_preferred_model, save_preferred_model
 from .provider_adapter import ProviderAdapter
-from .provider_catalog import configured_provider_names, get_model_capabilities, get_provider, get_provider_model_hints, list_providers
+from .provider_catalog import configured_provider_names, get_model_capabilities, get_provider, get_provider_model_hints, list_providers, test_upstream_base_url
 from .provider_errors import ProviderError, ProviderHTTPError
 from .provider_routing import AliasName, PUBLIC_MODEL_ALIASES, ResolvedModelRequest, choose_candidates, resolve_alias_candidates, resolve_model_request
 from .provider_transport import Transport
@@ -26,6 +26,44 @@ from .token_limit_store import load_token_limits, upsert_token_limit
 from .token_policy import model_default_output_tokens, model_default_timeout_seconds, probe_output_tokens, response_token_budget, trim_prompt
 
 JsonObject = dict[str, object]
+
+
+def _contract_test_paths(
+    *,
+    dotenv_path: Path | None,
+    health_path: Path | None,
+    preferred_model_path: Path | None,
+    token_limit_path: Path | None,
+) -> tuple[Path | None, Path | None, Path | None, Path | None]:
+    """Redirect runtime files when the contract process test supplies a state directory.
+
+    Args:
+        dotenv_path: Caller-supplied dotenv path.
+        health_path: Caller-supplied health path.
+        preferred_model_path: Caller-supplied preferred-model path.
+        token_limit_path: Caller-supplied token-limit path.
+
+    Returns:
+        The same paths, or paths under ``FREE_PROXY_TEST_STATE_DIR`` when that
+        directory is set together with a loopback ``FREE_PROXY_TEST_UPSTREAM``.
+        Explicit caller paths stay in place.
+
+    Raises:
+        ProviderError: The state directory is set but is not an existing directory,
+        or the upstream variable is not a loopback HTTP URL.
+    """
+    raw_state = os.environ.get('FREE_PROXY_TEST_STATE_DIR', '').strip()
+    if not raw_state or test_upstream_base_url() is None:
+        return dotenv_path, health_path, preferred_model_path, token_limit_path
+    root = Path(raw_state)
+    if not root.is_dir():
+        raise ProviderError('FREE_PROXY_TEST_STATE_DIR must be an existing directory')
+    return (
+        dotenv_path or (root / '.env'),
+        health_path or (root / 'health.json'),
+        preferred_model_path or (root / 'preferred-model.json'),
+        token_limit_path or (root / 'token-limits.json'),
+    )
 
 
 @dataclass(frozen=True)
@@ -77,6 +115,12 @@ class ProxyService:
         outbound_rpm: int = 60,
         debug_log: Callable[..., None] | None = None,
     ) -> None:
+        dotenv_path, health_path, preferred_model_path, token_limit_path = _contract_test_paths(
+            dotenv_path=dotenv_path,
+            health_path=health_path,
+            preferred_model_path=preferred_model_path,
+            token_limit_path=token_limit_path,
+        )
         self.dotenv_path = dotenv_path or DOTENV_PATH
         hydrate_env(self.dotenv_path)
         self.transport = transport

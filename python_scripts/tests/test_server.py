@@ -171,6 +171,11 @@ class ServerApiTests(unittest.TestCase):
         args = build_parser().parse_args(['serve', '--debug'])
         self.assertEqual(args.command, 'serve')
         self.assertTrue(args.debug)
+        self.assertEqual(args.port, 8765)
+
+    def test_serve_parser_accepts_port(self) -> None:
+        args = build_parser().parse_args(['serve', '--port', '8791'])
+        self.assertEqual(args.port, 8791)
 
     def test_health_route(self) -> None:
         client = TestClient(app)

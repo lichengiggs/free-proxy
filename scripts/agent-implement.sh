@@ -327,8 +327,9 @@ if [[ "$only_status" == "fail" ]]; then
 fi
 
 test_log="$AGENT_PIPELINE_STATE_DIR/reviews/issue-${ISSUE}.tests.log"
+agent_pipeline_py extract "$WORKDIR/body.md" "Acceptance" > "$WORKDIR/acceptance.txt"
 set +e
-agent_pipeline_run_project_tests "$wt" "$test_log"
+agent_pipeline_run_project_tests "$wt" "$test_log" "$base" "$WORKDIR/acceptance.txt"
 test_rc=$?
 set -e
 if [[ "$test_rc" -ne 0 ]]; then

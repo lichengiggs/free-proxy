@@ -227,10 +227,21 @@ scripts/agent-implement.sh 123 --fix
 实现工作区和审查工作区都跑：
 
 ```bash
-uv run python -m unittest discover -s python_scripts/tests -p 'test_*.py'
+uv run python -m unittest discover -s python_scripts/tests -p 'test_*.py' -v
 ```
 
-没有 `uv` 时，脚本改用 `python3 -m unittest`，参数相同。没有 `python_scripts/tests` 时跳过，并在日志里写明。
+没有 `uv` 时，脚本改用 `python3 -m unittest`，参数相同。`-v` 让日志里留下每条测试的名字。本地手跑可以不带 `-v`。
+
+这条命令退出码是 0 还不够。流水线另外拒绝合并，并且不会自动再开一轮修复：
+
+- 没有 `python_scripts/tests`，或日志里没有单独一行 `OK`
+- 工作区里 `def test_` 的数量少于 `origin/<base>`
+- `python_scripts/tests/test_public_contract.py` 的 blob 和 `origin/<base>` 不一致，或日志里没有 `test_process_stream_reaches_done` 和 `test_console_journey` 的 ok
+- Acceptance 写了 `live provider: required`，但日志里没有单独一行 `live provider: ok`
+
+公开契约文件只在人工提交里改。自动流水线改了它，开 PR 前就会停。
+
+`console/SSE: required` 看的是上面那条 unittest 日志，不是另一条命令。`live provider: required` 才会再跑 `scripts/check_live_provider.py`。没写这一行时不打真实上游。`AGENT_PIPELINE_LIVE_PROVIDER=0` 会跳过这次调用。
 
 GitHub 一侧用 `gh pr checks` 读取。这个脚手架不新增 Actions workflow。
 

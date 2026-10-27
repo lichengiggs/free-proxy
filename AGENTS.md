@@ -65,6 +65,7 @@
 - 采用 TDD（red -> green），测试与实现同步提交。
 - 提交前最少执行：
   - `uv run python -m unittest discover -s python_scripts/tests -p 'test_*.py'`
+- `python_scripts/tests/test_public_contract.py` 锁住公开接口、SSE、probe 与 chat 的输出预算，以及控制台旅程。自动流水线拒绝合并对这个文件的修改。公开行为要改时走人工提交。
 - 清理中间文档（如 `plan.md`），保留并更新长期文档（`docs/research.md` / README）。运行时学习、探测、健康状态文件只做本地生成，不入库。
 
 ## Git 提交规范

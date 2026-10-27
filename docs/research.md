@@ -110,6 +110,8 @@
 uv run python -m unittest discover -s python_scripts/tests -p 'test_*.py'
 ```
 
+同一条命令会跑 `python_scripts/tests/test_public_contract.py`。自动流水线还要求这份文件和默认分支的 blob 一致，并且测试方法数量不能比默认分支少。
+
 ## 7. Debug 排障模式
 
 - 启动命令：`uv run free-proxy serve --debug`
