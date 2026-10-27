@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import unittest
 
-from python_scripts.response_normalizer import normalize_json_success, normalize_provider_response
+from python_scripts.response_normalizer import normalize_json_success, normalize_provider_response, synthesize_openai_json_from_sse
 
 
 class ResponseNormalizerTests(unittest.TestCase):
@@ -54,3 +54,35 @@ class ResponseNormalizerTests(unittest.TestCase):
         self.assertEqual(resp.status, 200)
         self.assertIn(b'text/event-stream', resp.headers.get('Content-Type', '').encode())
         self.assertIsNotNone(resp.stream_chunks)
+
+    def test_synthesize_prefers_content_over_reasoning_and_keeps_last_finish_reason(self) -> None:
+        raw = synthesize_openai_json_from_sse(
+            [
+                b'data: {"choices":[{"index":0,"delta":{"reasoning_content":"think-1"},"finish_reason":"length"}]}\n\n',
+                b'data: {"choi',
+                b'ces":[{"index":0,"delta":{"content":"answer-1"},"finish_reason":"stop"}]}\n\n',
+                b'data: not-json\n\n',
+                b'data: [DONE]\n\n',
+            ],
+            provider='groq',
+            model='llama',
+        )
+        parsed = json.loads(raw)
+        self.assertEqual(parsed['choices'][0]['message']['content'], 'answer-1')
+        self.assertEqual(parsed['choices'][0]['finish_reason'], 'stop')
+        self.assertNotIn('think-1', parsed['choices'][0]['message']['content'])
+
+    def test_synthesize_concatenates_reasoning_when_content_is_empty(self) -> None:
+        raw = synthesize_openai_json_from_sse(
+            [
+                b'data: {"choices":[{"index":0,"delta":{"reasoning_content":"think-1"}}]}\n\n',
+                b'data: {"choices":[{"index":0,"delta":{"content":""},"finish_reason":null}]}\n\n',
+                b'data: {"choices":[{"index":0,"delta":{"reasoning_content":"think-2"},"finish_reason":"length"}]}\n\n',
+                b'data: [DONE]\n\n',
+            ],
+            provider='amd',
+            model='Qwen3.8-27B',
+        )
+        parsed = json.loads(raw)
+        self.assertEqual(parsed['choices'][0]['message']['content'], 'think-1think-2')
+        self.assertEqual(parsed['choices'][0]['finish_reason'], 'length')

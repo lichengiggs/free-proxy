@@ -12,7 +12,7 @@ from .provider_errors import ProviderError
 from .provider_routing import CandidateTarget, build_auto_candidates, candidate_in_cooldown
 from .protocol_converter import gemini_json_to_openai_chat
 from .request_normalizer import ChatRequest, normalize_chat_request
-from .response_normalizer import RelayResponse, normalize_provider_response, sanitize_model_text
+from .response_normalizer import RelayResponse, normalize_provider_response, sanitize_model_text, synthesize_openai_json_from_sse
 from .token_policy import DEFAULT_POLICY, TokenPolicy, model_default_output_tokens, response_token_budget, trim_prompt
 
 
@@ -177,7 +177,9 @@ class OpenAIRelay:
         payload = {key: value for key, value in request.raw_payload.items() if key in OPENAI_PASSTHROUGH_FIELDS}
         payload.pop('requested_model', None)
         payload['model'] = model
-        payload['stream'] = False
+        # OpenAI 格式始终向上游开流，避免非流式读超时切断长回复。
+        # Gemini 保持 stream false，继续走 generateContent JSON。
+        payload['stream'] = get_provider(provider).format == 'openai'
         messages = self._trim_messages_for_provider(provider, request.messages)
         # 顶层 system（Claude 系客户端常见）归一化为 messages 首条 system 消息
         system_text = request.raw_payload.get('system')
@@ -280,6 +282,25 @@ class OpenAIRelay:
         live_health[key] = entry
         self._record_health(provider, model, ok, reason, **fields)
         return plan
+
+    @staticmethod
+    def _upstream_error_text(adapter_response: object) -> str:
+        body = getattr(adapter_response, 'body', None)
+        if isinstance(body, (bytes, bytearray)) and body:
+            return bytes(body).decode('utf-8', errors='ignore')
+        stream = getattr(adapter_response, 'stream', None)
+        if stream is not None:
+            parts: list[bytes] = []
+            for chunk in stream:
+                if isinstance(chunk, memoryview):
+                    chunk = chunk.tobytes()
+                if isinstance(chunk, (bytes, bytearray)) and chunk:
+                    parts.append(bytes(chunk))
+            if parts:
+                return b''.join(parts).decode('utf-8', errors='ignore')
+        if isinstance(body, (bytes, bytearray)):
+            return bytes(body).decode('utf-8', errors='ignore')
+        return ''
 
     @staticmethod
     def _retry_after_header(adapter_response: object) -> str | None:
@@ -404,6 +425,44 @@ class OpenAIRelay:
                     break
                 continue
             if adapter_response.status < 400:
+                stream = getattr(adapter_response, 'stream', None)
+                if stream is not None and not request.stream:
+                    try:
+                        synthesized = synthesize_openai_json_from_sse(
+                            stream,
+                            provider=candidate.provider,
+                            model=candidate.model,
+                        )
+                    except Exception as exc:
+                        failure = classify_error(0, str(exc))
+                        self._remember_attempt(
+                            live_health,
+                            candidate.provider,
+                            candidate.model,
+                            ok=False,
+                            reason=failure.category,
+                            category=failure.category,
+                            now_ts=now_ts,
+                            retry_after=None,
+                        )
+                        decision = decide_next_action(
+                            FallbackContext(index, same_provider_attempts),
+                            RelayAttemptResult(False, candidate.provider, candidate.model, failure.category, None, None, str(exc)),
+                        )
+                        if self._stop_after_failure(decision.action, failure.category):
+                            break
+                        continue
+                    self._remember_attempt(
+                        live_health,
+                        candidate.provider,
+                        candidate.model,
+                        ok=True,
+                        reason=None,
+                        category=None,
+                        now_ts=now_ts,
+                        retry_after=None,
+                    )
+                    return RelayResponse(200, {'Content-Type': 'application/json; charset=utf-8'}, synthesized, None)
                 self._remember_attempt(
                     live_health,
                     candidate.provider,
@@ -414,6 +473,13 @@ class OpenAIRelay:
                     now_ts=now_ts,
                     retry_after=None,
                 )
+                if stream is not None:
+                    return RelayResponse(
+                        200,
+                        {'Content-Type': 'text/event-stream; charset=utf-8'},
+                        None,
+                        stream,
+                    )
                 if adapter_response.body is None:
                     return RelayResponse(200, {'Content-Type': 'application/json; charset=utf-8'}, b'', None)
                 return normalize_provider_response(
@@ -422,8 +488,12 @@ class OpenAIRelay:
                     body=adapter_response.body,
                     stream=request.stream,
                 )
+            try:
+                error_text = self._upstream_error_text(adapter_response)
+            except Exception as exc:
+                error_text = str(exc)
             retry_after = self._retry_after_header(adapter_response)
-            failure = classify_error(adapter_response.status, (adapter_response.body or b'').decode('utf-8', errors='ignore'))
+            failure = classify_error(adapter_response.status, error_text)
             plan = self._remember_attempt(
                 live_health,
                 candidate.provider,

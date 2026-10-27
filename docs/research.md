@@ -69,8 +69,9 @@
   - 校验公开模型面，接受 `auto` / `free-proxy/auto` / `free_proxy/auto`，对外模型名归一为 `free-proxy/auto`
   - 统一提取 `requested_model`、`messages`、输出预算
   - 构建 health + hints + 静态 fallback 候选池
-  - 按错误分类执行 fallback
-  - 上游调用固定 `stream: false`；客户端要求流式时，把上游 JSON 包装成 OpenAI SSE
+  - 按错误分类执行 fallback；已经把 2xx SSE 交给客户端之后不再换 provider
+  - OpenAI 格式上游始终 `stream: true`。客户端要求流式时按到达顺序转发上游 SSE，包含 `data: [DONE]`；客户端不要求流式时，按顺序拼接 `choices[0].delta.content`，正文为空才改用拼接后的 `delta.reasoning_content`，`finish_reason` 取最后一个非空值，再合成 OpenAI JSON
+  - 适配器只返回 JSON body 时保留现有 JSON 归一化；客户端要求流式且没有 SSE 迭代器时，仍把该 JSON 一次性包装成 SSE。Gemini 上游保持 `stream: false` 和 `generateContent` JSON，不为它发明 SSE
 
 ### 3.6 HTTP Server
 
