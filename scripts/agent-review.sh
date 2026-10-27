@@ -104,6 +104,15 @@ stop_pipeline() {
   exit 0
 }
 
+# 审查评论里的三行声明。没写的项显示 missing，方便人和下一轮实现者看见。
+checks_block() {
+  if [[ -n "${verdict_source:-}" && -f "$verdict_source" ]]; then
+    agent_pipeline_py checks-block "$verdict_source"
+  else
+    printf '%s\n' "unit: missing" "console/SSE: missing" "live provider: missing"
+  fi
+}
+
 gh pr view "$PR" --json number,title,body,state,url,headRefName,headRefOid,baseRefName > "$WORKDIR/pr.json"
 pr_state=$(agent_pipeline_py json-str "$WORKDIR/pr.json" state)
 agent_pipeline_py json-str "$WORKDIR/pr.json" body > "$WORKDIR/pr-body.md"
@@ -170,7 +179,11 @@ merge_pr() {
   if [[ "$MERGE" != "1" ]]; then
     agent_pipeline_comment_once pr "$PR" \
       "<!-- agent-pipeline:notice=accept-no-merge sha=${head_sha} -->" \
-      "审查结果是 ACCEPT，检查通过。AGENT_PIPELINE_MERGE=0，没有执行 gh pr merge。"
+      "审查结果是 ACCEPT，检查通过。AGENT_PIPELINE_MERGE=0，没有执行 gh pr merge。
+
+## 检查声明
+
+$(checks_block)"
     agent_pipeline_state_put "$STATE_FILE" status accepted_unmerged
     agent_pipeline_state_put "$STATE_FILE" verdict ACCEPT
     agent_pipeline_state_put "$STATE_FILE" owner_pid ""
@@ -187,7 +200,11 @@ merge_pr() {
   esac
   agent_pipeline_comment_once pr "$PR" \
     "<!-- agent-pipeline:notice=merging sha=${head_sha} -->" \
-    "ACCEPT，且约定检查通过。准备 ${strategy} 合并 ${head_sha}。"
+    "ACCEPT，且约定检查通过。准备 ${strategy} 合并 ${head_sha}。
+
+## 检查声明
+
+$(checks_block)"
   # 先卸掉 worktree，否则本机分支还被占用，gh pr merge --delete-branch 会失败。
   agent_pipeline_remove_worktree "$AGENT_PIPELINE_MAIN_ROOT/.worktrees/agent-pipeline/review-${PR}"
   agent_pipeline_remove_worktree "$AGENT_PIPELINE_MAIN_ROOT/.worktrees/agent-pipeline/issue-${ISSUE}"
@@ -375,10 +392,11 @@ if [[ -n "$(git -C "$wt" status --porcelain)" ]]; then
 fi
 
 verdict=""
+verdict_source=""
 if verdict=$(agent_pipeline_py verdict "$verdict_file"); then
-  :
+  verdict_source="$verdict_file"
 elif verdict=$(agent_pipeline_py verdict "$stdout_log"); then
-  :
+  verdict_source="$stdout_log"
 else
   verdict=""
 fi
@@ -409,6 +427,17 @@ agent_pipeline_state_put "$STATE_FILE" owner_pid ""
 
 case "$applied" in
   accept)
+    checks_result=$(agent_pipeline_py checks-gate "$WORKDIR/acceptance.txt" "$verdict_source" "$head_sha")
+    checks_status=$(printf '%s\n' "$checks_result" | head -n 1)
+    if [[ "$checks_status" != "pass" ]]; then
+      stop_pipeline checks_declared \
+        "<!-- agent-pipeline:notice=checks-declared sha=${head_sha} -->" \
+        "审查结果是 ACCEPT，但声明的检查不允许合并。缺了三行、Acceptance 要求的项写成了 not run，或 ran 的 sha 不是这个 head。流水线停止，不会自动再修一轮。
+
+## 检查声明
+
+$(checks_block)"
+    fi
     remote=$(agent_pipeline_classify_remote_checks "$PR" "$WORKDIR/checks.json" "$WORKDIR/checks.err")
     gate=$(agent_pipeline_merge_gate accept "$local_tests" "$remote" "$only_status")
     apply_gate "$gate" 0
@@ -420,6 +449,10 @@ case "$applied" in
     agent_pipeline_comment_once pr "$PR" \
       "<!-- agent-pipeline:notice=fix sha=${head_sha} round=${fix_rounds} -->" \
       "审查结果 FIX（第 ${fix_rounds}/${AGENT_PIPELINE_MAX_FIX_ROUNDS} 轮）。下一轮实现者只会看到这些 NOTES:
+
+## 检查声明
+
+$(checks_block)
 
 ${notes}"
     ;;
@@ -435,6 +468,10 @@ ${notes}"
     agent_pipeline_comment_once pr "$PR" \
       "<!-- agent-pipeline:notice=reject sha=${head_sha} -->" \
       "审查结果 ${verdict}。流水线停止，不会再自动修改。${extra}
+
+## 检查声明
+
+$(checks_block)
 
 ${notes}"
     agent_pipeline_remove_worktree "$wt"

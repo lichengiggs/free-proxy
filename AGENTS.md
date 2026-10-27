@@ -99,7 +99,9 @@
 - 这是仓库脚手架，不改变代理运行时。
 - 约定、阶段和干跑：`docs/agent-pipeline.md`
 - 人开 Issue 并打上 `ready` 之后才进入流水线。实现与审查必须分进程。
-- 脚本：`scripts/agent-implement.sh`、`scripts/agent-review.sh`、`scripts/agent-poll.sh`
+- 脚本：`scripts/agent-implement.sh`、`scripts/agent-review.sh`、`scripts/agent-poll.sh`、`scripts/agent-night-review.sh`
+- 错题本是根目录 `LESSONS.md`。夜审只核对和收集证据，见 `docs/agent-pipeline/night-review.md`。同一条规则出现在 3 个不同日期后，才写进本文件并从错题本删掉。
+- 审查评论必须声明 `unit`、`console/SSE`、`live provider`。没跑的写成 `not run`。Acceptance 点名必查而该项是 `not run` 时，不能合并。
 
 ## 工具规范
 

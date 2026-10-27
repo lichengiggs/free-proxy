@@ -364,6 +364,12 @@ Fixes #${ISSUE}
 $(cat "$WORKDIR/only-edit.txt")
 
 本地测试在开 PR 前已通过。由 scripts/agent-implement.sh 打开。审查者在另一个进程里运行。
+
+审查评论里的检查声明固定为这三行，没跑的写成 not run：
+
+- unit
+- console/SSE
+- live provider
 EOF
   gh pr create --base "$base" --head "$branch" --title "[agent] ${short}" --body-file "$WORKDIR/pr-body.md"
   pr_number=$(gh pr view "$branch" --json number --jq .number)

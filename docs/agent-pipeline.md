@@ -69,6 +69,15 @@ Issue 必须是打开状态，并且包含这三个标题，大小写和连字�
 
 如果 `Only-edit` 里没有像路径的行，脚本不去猜。审查者根据那段说明判断范围。
 
+`## Surface` 可以不写。写了的话，实现者按那个入口验收。流水线不因为缺这一节而拒绝 Issue。
+
+Acceptance 里可以用下面两行把额外检查标成必查。不写时，审查可以把它们声明成 `not run`。`unit` 默认必查，只有写了 `unit: not required` 才例外。
+
+```text
+console/SSE: required
+live provider: required
+```
+
 正文模板在 [`.github/ISSUE_TEMPLATE/agent-fix.md`](../.github/ISSUE_TEMPLATE/agent-fix.md)。模板不会自动加上 `ready`。正文写完再打这个标签。
 
 ## ACCEPT、REJECT、FIX
@@ -77,11 +86,13 @@ Issue 必须是打开状态，并且包含这三个标题，大小写和连字�
 
 | 裁决 | 含义 | 脚本做什么 |
 |---|---|---|
-| `ACCEPT` | 满足 Acceptance，diff 在 Only-edit 内，测试日志是绿的。 | 本地测试通过、Only-edit 机械检查通过或跳过、GitHub checks 全绿或根本没有 checks 时，才 squash 合并。 |
+| `ACCEPT` | 满足 Acceptance，diff 在 Only-edit 内，测试日志是绿的，三项检查声明允许合并。 | 本地测试通过、Only-edit 机械检查通过或跳过、声明的检查通过、GitHub checks 全绿或根本没有 checks 时，才 squash 合并。 |
 | `FIX` | 还可以用一轮有限的修改补上。`NOTES` 写清要改什么。 | 在同一分支上再跑实现者，最多 2 轮。 |
 | `REJECT` | 不要再自动改。 | 在 PR 上评论并停止。PR 和 Issue 保持打开。 |
 
-模型说了 `ACCEPT`，但测试是红的、机械检查越界、或 GitHub checks 失败：不合并，也不会悄悄再开一轮修复。评论后停止。
+模型说了 `ACCEPT`，但测试是红的、机械检查越界、声明的检查不允许合并、或 GitHub checks 失败：不合并，也不会悄悄再开一轮修复。评论后停止。
+
+声明的检查是裁决文件里的三行：`unit`、`console/SSE`、`live provider`。每一行要么是 `ran <head 的 sha>`，要么是 `not run`。少一行、`ran` 的 sha 不是这个 head、或 Acceptance 标成 `required` 的项写成 `not run`，都按不允许合并处理。PR 评论里会原样贴上这三行。
 
 GitHub checks 还在跑时，后续轮询继续等（默认 10 轮）。head SHA 没变就不再叫审查者。head 变了，原来的 `ACCEPT` 作废，在审查次数上限内重新审查。
 
@@ -97,6 +108,7 @@ GitHub checks 还在跑时，后续轮询继续等（默认 10 轮）。head SHA
 | 2 轮 FIX 之后又是 FIX | 强制 REJECT，停止 | 否 |
 | 审查者给出 REJECT | 评论，停止 | 否 |
 | ACCEPT 但测试或 Only-edit 失败 | 不合并，停止 | 否 |
+| ACCEPT 但检查声明缺失、必查项是 not run，或 ran 的 sha 不是 head | 不合并，停止（`checks_declared`） | 否 |
 | ACCEPT 且 GitHub checks 还在跑 | 等待，不重新审查 | 到轮询上限后停止 |
 | ACCEPT 且 checks 全绿，或没有 GitHub checks | squash 合并 | 不适用 |
 | agent 非 0 退出、超时、或没有裁决 | 评论，停止 | 否 |
@@ -149,6 +161,9 @@ scripts/agent-poll.sh --once --dry-run
 
 # 前台守护。Ctrl-C 停止。
 scripts/agent-poll.sh --interval 60
+
+# 夜审。核对错题本，并写出当天证据包。不调用 agent，不改仓库。
+scripts/agent-night-review.sh
 ```
 
 第一次真跑、先不要自动合并：
@@ -232,6 +247,14 @@ gh pr merge <pr> --squash --delete-branch --match-head-commit <审查过的 sha>
 
 `--match-head-commit` 用来拒绝合并审查者没看过的 SHA。策略用 `AGENT_PIPELINE_MERGE_STRATEGY` 改。
 
+## 夜审和错题本
+
+根目录 `LESSONS.md` 记合并之后才看出来的规则。实现者和审查者只读「仍有效」。
+
+`scripts/agent-night-review.sh` 在本机跑。它核对哪些条目该升格、哪些该归档，并把当天的提交和审查记录写进 `.agent-pipeline/night-review/`。它不调用编码 agent，也不改 `LESSONS.md`。
+
+升格、归档和条目格式见 [夜审说明](agent-pipeline/night-review.md)。满 3 个不同日期的规则写进 `AGENTS.md` 后，从错题本删掉。超过 90 天没有再出现、又还没满 3 次的，挪到「归档」。
+
 ## 文件
 
 | 路径 | 作用 |
@@ -239,8 +262,11 @@ gh pr merge <pr> --squash --delete-branch --match-head-commit <审查过的 sha>
 | `scripts/agent-poll.sh` | 本机轮询 |
 | `scripts/agent-implement.sh` | 实现者 A |
 | `scripts/agent-review.sh` | 审查者 B |
+| `scripts/agent-night-review.sh` | 本机夜审：核对错题本，写出证据包 |
 | `scripts/lib/agent-pipeline-common.sh` | 解析、状态、调用 agent |
 | `scripts/tests/test_agent_pipeline.sh` | 裁决表和解析测试 |
 | `docs/agent-pipeline/implementer-brief.md` | 实现者角色卡 |
 | `docs/agent-pipeline/reviewer-brief.md` | 审查者角色卡 |
+| `docs/agent-pipeline/night-review.md` | 夜审扫什么、怎么升格和归档 |
+| `LESSONS.md` | 错题本 |
 | `.github/ISSUE_TEMPLATE/agent-fix.md` | Issue 正文模板 |

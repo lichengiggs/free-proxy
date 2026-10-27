@@ -234,6 +234,34 @@ def cmd_verdict(path):
             return 0
     return 1
 
+CHECK_NAMES = ("unit", "console/SSE", "live provider")
+CHECK_LINE = re.compile(
+    r"^(unit|console/SSE|live provider):[ \t]+(not run|ran[ \t]+([0-9a-fA-F]{7,64}))[ \t]*$"
+)
+REQUIRE_LINE = re.compile(
+    r"^(?:[-*][ \t]+)?(unit|console/SSE|live provider):[ \t]+(required|not required)[ \t]*$"
+)
+
+
+def parse_check_lines(text):
+    found = {}
+    duplicate = False
+    for raw in text.splitlines():
+        match = CHECK_LINE.match(raw.strip())
+        if not match:
+            continue
+        name = match.group(1)
+        if name in found:
+            duplicate = True
+            found[name] = None
+            continue
+        if match.group(2) == "not run":
+            found[name] = ("not run", "")
+        else:
+            found[name] = ("ran", match.group(3))
+    return found, duplicate
+
+
 def cmd_notes(path):
     if not os.path.isfile(path):
         return 0
@@ -244,11 +272,140 @@ def cmd_notes(path):
             if re.match(r"^VERDICT:[ \t]*(ACCEPT|REJECT|FIX)$", raw.strip()):
                 started = True
             continue
+        if CHECK_LINE.match(raw.strip()):
+            continue
         match = re.match(r"^NOTES:[ \t]?(.*)$", raw)
         notes.append(match.group(1) if match else raw)
     text = "\n".join(notes).strip()
     if text:
         sys.stdout.write(text)
+    return 0
+
+
+def cmd_checks_block(path):
+    found = {}
+    if os.path.isfile(path):
+        found, _duplicate = parse_check_lines(read_text(path))
+    for name in CHECK_NAMES:
+        item = found.get(name)
+        if not item:
+            sys.stdout.write("%s: missing\n" % name)
+        elif item[0] == "not run":
+            sys.stdout.write("%s: not run\n" % name)
+        else:
+            sys.stdout.write("%s: ran %s\n" % (name, item[1]))
+    return 0
+
+
+def required_from_acceptance(text):
+    required = {"unit": True, "console/SSE": False, "live provider": False}
+    for raw in strip_comments(text).splitlines():
+        match = REQUIRE_LINE.match(raw.strip())
+        if match:
+            required[match.group(1)] = match.group(2) == "required"
+    return required
+
+
+def declared_sha_matches(declared, head):
+    declared = declared.lower()
+    head = (head or "").lower()
+    return len(declared) >= 7 and head.startswith(declared)
+
+
+def cmd_checks_gate(acceptance_path, verdict_path, head):
+    if not os.path.isfile(verdict_path):
+        sys.stdout.write("stop\nmissing\n")
+        return 0
+    text = read_text(verdict_path)
+    verdict = ""
+    for raw in text.splitlines():
+        match = re.match(r"^VERDICT:[ \t]*(ACCEPT|REJECT|FIX)$", raw.strip())
+        if match:
+            verdict = match.group(1)
+            break
+    if verdict != "ACCEPT":
+        sys.stdout.write("ignore\n")
+        return 0
+    found, duplicate = parse_check_lines(text)
+    if duplicate or any(name not in found or not found[name] for name in CHECK_NAMES):
+        sys.stdout.write("stop\nmissing\n")
+        return 0
+    acceptance = read_text(acceptance_path) if os.path.isfile(acceptance_path) else ""
+    required = required_from_acceptance(acceptance)
+    for name in CHECK_NAMES:
+        kind, sha = found[name]
+        if kind == "ran" and not declared_sha_matches(sha, head):
+            sys.stdout.write("stop\nsha %s\n" % name)
+            return 0
+        if required[name] and kind != "ran":
+            sys.stdout.write("stop\nnot-run %s\n" % name)
+            return 0
+    sys.stdout.write("pass\n")
+    return 0
+
+
+def cmd_lesson_status(path, today):
+    import datetime
+
+    try:
+        today_d = datetime.date.fromisoformat(today)
+    except ValueError:
+        sys.stderr.write("bad date: %s\n" % today)
+        return 2
+    if not os.path.isfile(path):
+        sys.stderr.write("missing lessons file: %s\n" % path)
+        return 1
+    active = heading_sections(read_text(path)).get("仍有效", "")
+    entries = []
+    title = None
+    body = []
+
+    def flush():
+        if title is not None:
+            entries.append((title, "\n".join(body)))
+
+    for line in active.splitlines():
+        match = re.match(r"^###[ \t]+(.+?)[ \t]*$", line)
+        if match:
+            flush()
+            title = match.group(1).replace("\t", " ")
+            body = []
+            continue
+        if title is not None:
+            body.append(line)
+    flush()
+    seen_re = re.compile(r"Seen[ \t]+(\d+)[ \t]*[×x][ \t]*\(([^)]*)\)")
+    for title, body_text in entries:
+        matches = list(seen_re.finditer(body_text))
+        if not matches:
+            sys.stdout.write("bad\t%s\tno Seen line\n" % title)
+            continue
+        last = matches[-1]
+        dates = []
+        bad_date = False
+        for raw_date in re.findall(r"\d{4}-\d{2}-\d{2}", last.group(2)):
+            try:
+                parsed = datetime.date.fromisoformat(raw_date)
+            except ValueError:
+                bad_date = True
+                break
+            if parsed not in dates:
+                dates.append(parsed)
+        if bad_date or not dates:
+            sys.stdout.write("bad\t%s\tbad Seen dates\n" % title)
+            continue
+        if int(last.group(1)) != len(dates):
+            sys.stdout.write("bad\t%s\tSeen count does not match dates\n" % title)
+            continue
+        if len(dates) >= 3:
+            shown = ", ".join(item.isoformat() for item in dates)
+            sys.stdout.write("promote\t%s\t%s\n" % (title, shown))
+            continue
+        last_seen = max(dates)
+        if (today_d - last_seen).days > 90:
+            sys.stdout.write("archive\t%s\t%s\n" % (title, last_seen.isoformat()))
+            continue
+        sys.stdout.write("ok\t%s\n" % title)
     return 0
 
 def cmd_match_prs(path, issue):
@@ -328,6 +485,9 @@ def main(argv):
         "only-edit": (cmd_only_edit, 2),
         "verdict": (cmd_verdict, 1),
         "notes": (cmd_notes, 1),
+        "checks-block": (cmd_checks_block, 1),
+        "checks-gate": (cmd_checks_gate, 3),
+        "lesson-status": (cmd_lesson_status, 2),
         "match-prs": (cmd_match_prs, 2),
         "classify-checks": (cmd_classify_checks, 1),
         "json-str": (cmd_json_str, 2),

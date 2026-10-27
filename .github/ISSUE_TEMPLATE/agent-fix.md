@@ -11,7 +11,15 @@ labels: []
 
 ## Acceptance
 
-<!-- 把这段注释换成审查者可以核对的验收条件。 -->
+<!-- 把这段注释换成审查者可以核对的验收条件。
+     需要控制台、SSE 或真实 provider 时，另起一行写：
+     console/SSE: required
+     live provider: required
+     不写这两行时，审查可以声明它们 not run。unit 默认 required。 -->
+
+## Surface
+
+<!-- 可选。报告或验证所在的入口：sdk、openclaw、opencode、console。没有就删掉这一节。 -->
 
 ## Only-edit
 

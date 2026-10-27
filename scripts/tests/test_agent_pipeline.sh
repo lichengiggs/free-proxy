@@ -97,6 +97,109 @@ EOF
 assert_eq "解析 FIX" "$(agent_pipeline_py verdict "$TMP/verdict.txt")" "FIX"
 assert_eq "解析 NOTES" "$(agent_pipeline_py notes "$TMP/verdict.txt")" "$(printf '补上测试\n第二行仍算说明')"
 
+HEAD_SHA="0123456789abcdef0123456789abcdef01234567"
+cat > "$TMP/accept.txt" <<EOF
+VERDICT: ACCEPT
+unit: ran ${HEAD_SHA}
+console/SSE: not run
+live provider: not run
+NOTES: 可以合并
+EOF
+printf '%s\n' "读者能看到检查命令" > "$TMP/acceptance-plain.txt"
+assert_eq "检查声明不进 NOTES" "$(agent_pipeline_py notes "$TMP/accept.txt")" "可以合并"
+assert_eq "三项声明按固定顺序" "$(agent_pipeline_py checks-block "$TMP/accept.txt")" "$(printf 'unit: ran %s\nconsole/SSE: not run\nlive provider: not run' "$HEAD_SHA")"
+assert_eq "默认只要求 unit" "$(agent_pipeline_py checks-gate "$TMP/acceptance-plain.txt" "$TMP/accept.txt" "$HEAD_SHA")" "pass"
+
+cat > "$TMP/accept-short.txt" <<'EOF'
+VERDICT: ACCEPT
+console/SSE: not run
+live provider: not run
+unit: ran 0123456
+EOF
+assert_eq "短 sha 对得上 head" "$(agent_pipeline_py checks-gate "$TMP/acceptance-plain.txt" "$TMP/accept-short.txt" "$HEAD_SHA")" "pass"
+
+cat > "$TMP/accept-missing.txt" <<EOF
+VERDICT: ACCEPT
+unit: ran ${HEAD_SHA}
+live provider: not run
+EOF
+assert_eq "少一行则不能合并" "$(agent_pipeline_py checks-gate "$TMP/acceptance-plain.txt" "$TMP/accept-missing.txt" "$HEAD_SHA")" "$(printf 'stop\nmissing')"
+
+cat > "$TMP/accept-unit-skip.txt" <<'EOF'
+VERDICT: ACCEPT
+unit: not run
+console/SSE: not run
+live provider: not run
+EOF
+assert_eq "默认 unit 没跑不能合并" "$(agent_pipeline_py checks-gate "$TMP/acceptance-plain.txt" "$TMP/accept-unit-skip.txt" "$HEAD_SHA")" "$(printf 'stop\nnot-run unit')"
+
+printf '%s\n' "console/SSE: required" > "$TMP/acceptance-console.txt"
+assert_eq "点名的 console 没跑不能合并" "$(agent_pipeline_py checks-gate "$TMP/acceptance-console.txt" "$TMP/accept.txt" "$HEAD_SHA")" "$(printf 'stop\nnot-run console/SSE')"
+
+printf '%s\n' "- live provider: required" > "$TMP/acceptance-live.txt"
+cat > "$TMP/accept-live.txt" <<EOF
+VERDICT: ACCEPT
+unit: ran ${HEAD_SHA}
+console/SSE: not run
+live provider: ran deadbeef
+EOF
+assert_eq "ran 的 sha 不是这个 head" "$(agent_pipeline_py checks-gate "$TMP/acceptance-live.txt" "$TMP/accept-live.txt" "$HEAD_SHA")" "$(printf 'stop\nsha live provider')"
+
+printf '%s\n' "unit: not required" > "$TMP/acceptance-no-unit.txt"
+assert_eq "写明 unit 不必查时可以 not run" "$(agent_pipeline_py checks-gate "$TMP/acceptance-no-unit.txt" "$TMP/accept-unit-skip.txt" "$HEAD_SHA")" "pass"
+assert_eq "FIX 不走检查声明闸门" "$(agent_pipeline_py checks-gate "$TMP/acceptance-plain.txt" "$TMP/verdict.txt" "$HEAD_SHA")" "ignore"
+
+cat > "$TMP/lessons.md" <<'EOF'
+# Lessons
+
+### 这段在仍有效之外，不该被扫到
+
+- Seen 3× (2026-01-01, 2026-01-02, 2026-01-03)
+
+## 仍有效
+
+### 记录跑过的检查
+
+- Evidence: #1 合入时没写跑了什么
+- Seen 3× (2026-07-01, 2026-07-02, 2026-07-03)
+
+### 旧规则还没满三次
+
+- Seen 1× (2026-07-28).
+
+### 九十天前正好还留着
+
+- Seen 1x (2026-07-29)
+
+### 最近只出现一次
+
+- Seen 1× (2026-10-20)
+
+### 次数和日期对不上
+
+- Seen 2× (2026-10-20)
+
+## 归档
+
+### 已经归档的不再处理
+
+- Seen 1× (2026-01-01)
+EOF
+assert_eq "错题本升格、归档和格式" \
+  "$(agent_pipeline_py lesson-status "$TMP/lessons.md" 2026-10-27)" \
+  "$(printf '%s\n' \
+    'promote	记录跑过的检查	2026-07-01, 2026-07-02, 2026-07-03' \
+    'archive	旧规则还没满三次	2026-07-28' \
+    'ok	九十天前正好还留着' \
+    'ok	最近只出现一次' \
+    'bad	次数和日期对不上	Seen count does not match dates')"
+
+set +e
+"$ROOT/scripts/agent-night-review.sh" --check --lessons "$TMP/lessons.md" --date 2026-10-27 >/dev/null
+night_rc=$?
+set -e
+assert_eq "夜审核对发现升格或归档时退出 2" "$night_rc" "2"
+
 cat > "$TMP/prs.json" <<'EOF'
 [
   {"number": 4, "title": "pipeline", "body": "Fixes #9\n\n<!-- agent-pipeline:issue=9 -->\n"},
@@ -158,7 +261,15 @@ agent_pipeline_state_put "$state_file" status needs_fix
 assert_eq "状态可更新" "$(agent_pipeline_state_get "$state_file" status)" "needs_fix"
 assert_eq "其他键还在" "$(agent_pipeline_state_get "$state_file" fix_rounds)" "1"
 
-for script in agent-implement.sh agent-review.sh agent-poll.sh; do
+AGENT_PIPELINE_STATE_DIR="$TMP/night-state" "$ROOT/scripts/agent-night-review.sh" --packet --date 2026-10-27 >/dev/null
+if [[ -f "$TMP/night-state/night-review/2026-10-27.md" ]] && grep -q "夜审" "$TMP/night-state/night-review/2026-10-27.md"; then
+  printf 'ok 夜审证据包\n'
+else
+  printf 'FAIL 夜审证据包\n' >&2
+  FAIL=1
+fi
+
+for script in agent-implement.sh agent-review.sh agent-poll.sh agent-night-review.sh; do
   bash -n "$ROOT/scripts/$script"
   "$ROOT/scripts/$script" --help >/dev/null
   printf 'ok %s --help\n' "$script"
