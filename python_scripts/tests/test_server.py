@@ -245,13 +245,15 @@ class ServerApiTests(unittest.TestCase):
 
     def test_openai_chat_completion_rejects_coding_alias_for_agents(self) -> None:
         client = TestClient(app)
-        resp = client.post(
-            '/v1/chat/completions',
-            json={'model': 'free-proxy/coding', 'messages': [{'role': 'user', 'content': 'hello'}]},
-        )
-        self.assertEqual(resp.status_code, 400)
-        self.assertIn('application/json', resp.headers.get('content-type', ''))
-        self.assertIn('model_deprecated', resp.text)
+        for model in ('coding', 'free-proxy/coding', 'free_proxy/coding'):
+            with self.subTest(model=model):
+                resp = client.post(
+                    '/v1/chat/completions',
+                    json={'model': model, 'messages': [{'role': 'user', 'content': 'hello'}]},
+                )
+                self.assertEqual(resp.status_code, 400)
+                self.assertIn('application/json', resp.headers.get('content-type', ''))
+                self.assertEqual(resp.json()['error']['code'], 'model_deprecated')
 
     def test_openai_chat_completion_stream_mode_returns_sse_when_requested(self) -> None:
         client = TestClient(app)
@@ -336,6 +338,75 @@ class ServerApiTests(unittest.TestCase):
         self.assertEqual(resp.status_code, 200)
         self.assertIn('text/event-stream', resp.headers.get('content-type', ''))
         self.assertIn('data: ', resp.text)
+
+    def test_legacy_chat_completion_streams_gemini_sse(self) -> None:
+        class Transport:
+            def __init__(self) -> None:
+                self.request_calls = 0
+
+            def request(
+                self,
+                method: str,
+                url: str,
+                headers: dict[str, str] | None = None,
+                body: bytes | None = None,
+                timeout: int = 30,
+            ) -> tuple[int, dict[str, str], bytes]:
+                del method, url, headers, body, timeout
+                self.request_calls += 1
+                raise AssertionError('gemini console stream must not call chat()')
+
+            def stream_request(
+                self,
+                method: str,
+                url: str,
+                headers: dict[str, str] | None = None,
+                body: bytes | None = None,
+                timeout: int = 30,
+            ) -> tuple[int, dict[str, str], object]:
+                del method, url, headers, body, timeout
+                candidate_lo: dict[str, object] = {
+                    'content': {'role': 'model', 'parts': [{'text': 'lo'}]},
+                    'finishReason': 'STOP',
+                }
+                events = [
+                    b'data: {"candidates":[{"content":{"role":"model","parts":[{"text":"hel"}]}}]}\n\n',
+                    f'data: {json.dumps({"candidates": [candidate_lo]}, separators=(",", ":"))}\n\n'.encode(),
+                ]
+                return 200, {'Content-Type': 'text/event-stream'}, iter(events)
+
+        previous = os.environ.get('GEMINI_API_KEY')
+        os.environ['GEMINI_API_KEY'] = 'test-gemini-key'
+        dotenv = Path(self.tmp.name) / 'blank.env'
+        dotenv.write_text('', encoding='utf-8')
+        transport = Transport()
+        try:
+            import python_scripts.server_fastapi as sf
+
+            sf._service = ProxyService(
+                transport=transport,
+                dotenv_path=dotenv,
+                health_path=Path(self.tmp.name) / 'health.json',
+                token_limit_path=Path(self.tmp.name) / 'limits.json',
+            )
+            client = TestClient(app)
+            resp = client.post(
+                '/chat/completions',
+                json={'provider': 'gemini', 'model': 'gemini-2.0-flash', 'messages': [{'role': 'user', 'content': 'hello'}], 'stream': True},
+            )
+        finally:
+            if previous is None:
+                os.environ.pop('GEMINI_API_KEY', None)
+            else:
+                os.environ['GEMINI_API_KEY'] = previous
+
+        self.assertEqual(transport.request_calls, 0)
+        self.assertEqual(resp.status_code, 200)
+        self.assertIn('text/event-stream', resp.headers.get('content-type', ''))
+        self.assertLess(resp.text.index('"content":"hel"'), resp.text.index('"content":"lo"'))
+        self.assertLess(resp.text.index('"content":"lo"'), resp.text.index('"finish_reason":"stop"'))
+        self.assertLess(resp.text.index('"finish_reason":"stop"'), resp.text.index('data: [DONE]'))
+        self.assertNotIn('actual_model', resp.text)
 
     def test_legacy_chat_completion_stream_mode_handles_non_openai_provider_content_result(self) -> None:
         class GeminiLegacyService(FakeService):

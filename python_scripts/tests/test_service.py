@@ -46,9 +46,18 @@ class FakeTransport:
         return 200, {}, json.dumps({'choices': [{'message': {'content': 'ok'}}]}).encode()
 
 
+def _gemini_sse_event(text: str, finish_reason: str | None = None) -> bytes:
+    candidate: dict[str, object] = {'content': {'role': 'model', 'parts': [{'text': text}]}}
+    if finish_reason is not None:
+        candidate['finishReason'] = finish_reason
+    payload = json.dumps({'candidates': [candidate]}, ensure_ascii=False, separators=(',', ':'))
+    return f'data: {payload}\n\n'.encode('utf-8')
+
+
 class GeminiTransport:
     def __init__(self) -> None:
         self.urls: list[str] = []
+        self.timeouts: list[int] = []
         self.stream_calls = 0
 
     def stream_request(
@@ -61,7 +70,7 @@ class GeminiTransport:
     ) -> tuple[int, dict[str, str], object]:
         del method, url, headers, body, timeout
         self.stream_calls += 1
-        raise AssertionError('gemini must not use stream_request')
+        raise AssertionError('gemini chat_text and probe must not use stream_request')
 
     def request(
         self,
@@ -71,11 +80,49 @@ class GeminiTransport:
         body: bytes | None = None,
         timeout: int = 30,
     ) -> tuple[int, dict[str, str], bytes]:
-        del headers, body, timeout
+        del headers, body
         self.urls.append(url)
+        self.timeouts.append(timeout)
         if method == 'GET' and url.endswith('/models'):
             return 200, {}, json.dumps({'models': [{'id': 'models/gemini-2.0-flash'}]}).encode('utf-8')
         return 200, {}, json.dumps({'candidates': [{'content': {'parts': [{'text': 'gemini-ok'}]}}]}).encode('utf-8')
+
+
+class GeminiSseTransport:
+    def __init__(self) -> None:
+        self.request_calls = 0
+        self.stream_urls: list[str] = []
+        self.headers: dict[str, str] | None = None
+        self.body: bytes | None = None
+
+    def request(
+        self,
+        method: str,
+        url: str,
+        headers: dict[str, str] | None = None,
+        body: bytes | None = None,
+        timeout: int = 30,
+    ) -> tuple[int, dict[str, str], bytes]:
+        del method, url, headers, body, timeout
+        self.request_calls += 1
+        raise AssertionError('gemini stream chat must not call request()')
+
+    def stream_request(
+        self,
+        method: str,
+        url: str,
+        headers: dict[str, str] | None = None,
+        body: bytes | None = None,
+        timeout: int = 30,
+    ) -> tuple[int, dict[str, str], object]:
+        del method, timeout
+        self.stream_urls.append(url)
+        self.headers = headers
+        self.body = body
+        return 200, {'Content-Type': 'text/event-stream; charset=utf-8'}, iter([
+            _gemini_sse_event('hel'),
+            _gemini_sse_event('lo', 'STOP'),
+        ])
 
 
 class FallbackTransport:
@@ -672,18 +719,68 @@ class ServiceTests(unittest.TestCase):
         self.assertEqual(parsed['choices'][0]['message']['content'], 'think-1think-2')
         self.assertEqual(parsed['choices'][0]['finish_reason'], 'length')
 
-    def test_execute_openai_target_ignores_stream_flag_for_non_openai_provider(self) -> None:
+    def test_gemini_probe_and_chat_text_stay_on_generate_content(self) -> None:
+        os.environ['GEMINI_API_KEY'] = 'test-gemini-key'
+        transport = GeminiTransport()
+        service = self.make_service(transport, request_timeout_seconds=7)
+        self.assertEqual(service.provider_adapter('gemini').chat_text('models/gemini-2.0-flash', 'ok'), 'gemini-ok')
+        result = service.probe('gemini', 'gemini-2.0-flash')
+
+        self.assertTrue(result.ok)
+        self.assertEqual(result.content, 'gemini-ok')
+        self.assertEqual(transport.stream_calls, 0)
+        self.assertEqual(transport.timeouts, [7, 7])
+        self.assertGreaterEqual(len(transport.urls), 2)
+        for url in transport.urls:
+            path = url.split('?', 1)[0]
+            self.assertTrue(path.endswith(':generateContent'))
+            self.assertFalse(path.endswith(':streamGenerateContent'))
+
+    def test_forward_direct_chat_without_stream_keeps_gemini_on_generate_content(self) -> None:
         os.environ['GEMINI_API_KEY'] = 'test-gemini-key'
         transport = GeminiTransport()
         service = self.make_service(transport)
-        target = ResolvedOpenAIRequest(provider='gemini', model='gemini-2.0-flash', alias=None)
-        result = service.execute_openai_target(target, {'model': 'ignored', 'stream': True, 'messages': [{'role': 'user', 'content': 'hello'}]})
+        result = service.forward_direct_chat(
+            'gemini',
+            'gemini-2.0-flash',
+            {'messages': [{'role': 'user', 'content': 'hello'}]},
+        )
 
         self.assertTrue(result.ok)
-        self.assertIsNone(result.stream_chunks)
         self.assertEqual(result.content, 'gemini-ok')
+        self.assertIsNone(result.stream_chunks)
         self.assertEqual(transport.stream_calls, 0)
-        self.assertTrue(any('generateContent' in url for url in transport.urls))
+        self.assertTrue(any(url.split('?', 1)[0].endswith(':generateContent') for url in transport.urls))
+
+    def test_forward_direct_chat_streams_gemini_sse(self) -> None:
+        os.environ['GEMINI_API_KEY'] = 'test-gemini-key'
+        transport = GeminiSseTransport()
+        service = self.make_service(transport)
+        result = service.forward_direct_chat(
+            'gemini',
+            'gemini-2.0-flash',
+            {'model': 'gemini-2.0-flash', 'messages': [{'role': 'user', 'content': 'hello'}], 'stream': True},
+        )
+
+        self.assertTrue(result.ok)
+        self.assertIsNone(result.content)
+        self.assertEqual(transport.request_calls, 0)
+        self.assertIn('text/event-stream', result.headers.get('Content-Type', ''))
+        url = transport.stream_urls[0]
+        path, _, query = url.partition('?')
+        self.assertTrue(path.endswith('/models/gemini-2.0-flash:streamGenerateContent'))
+        self.assertEqual(query, 'alt=sse')
+        self.assertNotIn('test-gemini-key', url)
+        self.assertEqual((transport.headers or {}).get('x-goog-api-key'), 'test-gemini-key')
+        upstream = json.loads(transport.body or b'{}')
+        self.assertEqual(upstream['contents'], [{'role': 'user', 'parts': [{'text': 'hello'}]}])
+        self.assertEqual(upstream['generationConfig']['temperature'], 0)
+        self.assertEqual(upstream['generationConfig']['maxOutputTokens'], 1024)
+        self.assertNotIn('tools', upstream)
+        text = b''.join(list(result.stream_chunks or [])).decode('utf-8')
+        self.assertLess(text.index('"content":"hel"'), text.index('"content":"lo"'))
+        self.assertLess(text.index('"content":"lo"'), text.index('"finish_reason":"stop"'))
+        self.assertLess(text.index('"finish_reason":"stop"'), text.index('data: [DONE]'))
 
     def test_chat_retries_once_after_token_limit_and_persists_learned_limit(self) -> None:
         transport = TokenLimitRetryTransport()

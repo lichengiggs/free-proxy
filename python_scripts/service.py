@@ -12,6 +12,7 @@ from .env_store import upsert_env
 from .errors import classify_error, remediation_suggestion
 from .health_store import hash_api_key, load_health, upsert_health
 from .openai_relay import OpenAIRelay
+from .protocol_converter import iter_gemini_sse_as_openai_chunks
 from .response_normalizer import synthesize_openai_json_from_sse
 from .preferred_model_store import load_preferred_model, save_preferred_model
 from .provider_adapter import ProviderAdapter
@@ -458,8 +459,98 @@ class ProxyService:
             category='server_error',
         )
 
+    def _forward_gemini_stream_chat(self, provider_name: str, model_id: str, payload: JsonObject) -> OpenAIForwardResult:
+        """Gemini 控制台流式聊天：上游走 streamGenerateContent，写出 OpenAI SSE。"""
+        try:
+            adapter = self.provider_adapter(provider_name)
+            prompt = trim_prompt(provider_name, self._extract_prompt(payload))
+            requested_output_tokens = self._requested_output_tokens(payload)
+            output_tokens = requested_output_tokens if requested_output_tokens is not None else response_token_budget(provider_name)
+            budget = resolve_token_budget(
+                provider=provider_name,
+                model=model_id,
+                prompt=prompt,
+                requested_output_tokens=output_tokens,
+                learned_limits=load_token_limits(self.token_limit_path),
+                model_metadata=None,
+            )
+            adapter_response = adapter.forward_chat(
+                {
+                    'model': model_id,
+                    'prompt': budget.trimmed_prompt,
+                    'max_tokens': budget.output_tokens_limit,
+                    'stream': True,
+                }
+            )
+        except ProviderError as exc:
+            category = classify_error(0, str(exc)).category
+            upsert_health(provider_name, model_id, False, reason=category, path=self.health_path)
+            if self.debug_log is not None:
+                self.debug_log(
+                    'request_failed',
+                    provider=provider_name,
+                    model=model_id,
+                    status=502,
+                    category=category,
+                    error=str(exc),
+                    suggestion=remediation_suggestion(category, provider_name),
+                )
+            return OpenAIForwardResult(
+                ok=False,
+                provider=provider_name,
+                model=model_id,
+                status=502,
+                headers={},
+                body=b'',
+                error=str(exc),
+                category=category,
+                suggestion=remediation_suggestion(category, provider_name),
+            )
+
+        upstream = adapter_response.stream
+        if adapter_response.status >= 400 or upstream is None:
+            raw_body = adapter_response.body if isinstance(adapter_response.body, (bytes, bytearray)) else b''
+            text = bytes(raw_body).decode('utf-8', errors='ignore')
+            status = adapter_response.status if adapter_response.status >= 400 else 502
+            failure = classify_error(status, text)
+            upsert_health(provider_name, model_id, False, reason=failure.category, path=self.health_path)
+            if self.debug_log is not None:
+                self.debug_log(
+                    'request_failed',
+                    provider=provider_name,
+                    model=model_id,
+                    status=status,
+                    category=failure.category,
+                    error=text or f'upstream status {status}',
+                    suggestion=remediation_suggestion(failure.category, provider_name),
+                )
+            return OpenAIForwardResult(
+                ok=False,
+                provider=provider_name,
+                model=model_id,
+                status=status,
+                headers=dict(adapter_response.headers) if isinstance(adapter_response.headers, dict) else {},
+                body=bytes(raw_body),
+                error=text or f'upstream status {status}',
+                category=failure.category,
+                suggestion=remediation_suggestion(failure.category, provider_name),
+            )
+
+        upsert_health(provider_name, model_id, True, path=self.health_path)
+        return OpenAIForwardResult(
+            ok=True,
+            provider=provider_name,
+            model=model_id,
+            status=adapter_response.status,
+            headers={'Content-Type': 'text/event-stream; charset=utf-8'},
+            body=b'',
+            stream_chunks=iter_gemini_sse_as_openai_chunks(upstream, provider=provider_name, model=model_id),
+        )
+
     def forward_direct_chat(self, provider_name: str, model_id: str, payload: JsonObject) -> OpenAIForwardResult:
         provider = get_provider(provider_name)
+        if provider.format == 'gemini' and bool(payload.get('stream')):
+            return self._forward_gemini_stream_chat(provider_name, model_id, payload)
         if provider.format != 'openai':
             prompt = self._extract_prompt(payload)
             requested_output_tokens = self._requested_output_tokens(payload)
