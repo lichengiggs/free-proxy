@@ -8,11 +8,11 @@ from python_scripts.token_policy import probe_output_tokens, response_token_budg
 class TokenPolicyTests(unittest.TestCase):
     def test_trim_prompt_keeps_short_text(self) -> None:
         text = 'hello world'
-        self.assertEqual(trim_prompt('github', text), text)
+        self.assertEqual(trim_prompt('groq', text), text)
 
     def test_trim_prompt_truncates_long_text(self) -> None:
-        text = 'a' * 7000
-        trimmed = trim_prompt('github', text)
+        text = 'a' * 13000
+        trimmed = trim_prompt('groq', text)
         self.assertNotEqual(trimmed, text)
         self.assertIn('...[内容已截断]...', trimmed)
         self.assertTrue(trimmed.startswith('a'))

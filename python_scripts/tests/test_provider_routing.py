@@ -31,19 +31,20 @@ class ProviderRoutingTests(unittest.TestCase):
         self.assertEqual(candidates[0], ('groq', 'llama-3.1-8b-instant'))
         self.assertIn(('gemini', 'gemini-3.1-flash-lite-preview'), candidates)
         self.assertTrue(all(provider != 'longcat' for provider, _model in candidates))
+        self.assertTrue(all(provider != 'github' for provider, _model in candidates))
 
     def test_auto_candidates_follow_configured_provider_order(self) -> None:
         target = resolve_model_request(
             model='free-proxy/auto',
             provider=None,
-            configured=['groq', 'gemini', 'github'],
-            known_providers={'groq', 'gemini', 'github'},
+            configured=['groq', 'gemini', 'mistral'],
+            known_providers={'groq', 'gemini', 'mistral'},
         )
         self.assertEqual(target.alias, 'auto')
 
         items = build_auto_candidates(
             requested_model=target.model,
-            configured=['groq', 'gemini', 'github'],
+            configured=['groq', 'gemini', 'mistral'],
             health={},
             now_ts=150,
             ttl_seconds=60,
@@ -59,6 +60,8 @@ class ProviderRoutingTests(unittest.TestCase):
             ],
         )
         self.assertTrue(all(provider != 'longcat' for provider, _model in pairs))
+        self.assertTrue(all(provider != 'github' for provider, _model in pairs))
+        self.assertTrue(all('models.github.ai' not in model for _provider, model in pairs))
 
     def test_longcat_prefixed_model_follows_unknown_provider_rule(self) -> None:
         target = resolve_model_request(
@@ -82,13 +85,36 @@ class ProviderRoutingTests(unittest.TestCase):
         self.assertTrue(all(item.provider != 'longcat' for item in items))
         self.assertEqual(items[0].provider, 'groq')
 
+    def test_github_prefixed_model_follows_unknown_provider_rule(self) -> None:
+        target = resolve_model_request(
+            model='github/gpt-4o',
+            provider=None,
+            configured=['groq', 'gemini'],
+            known_providers={'groq', 'gemini', 'openrouter'},
+        )
+        self.assertEqual(target.provider, 'groq')
+        self.assertEqual(target.model, 'github/gpt-4o')
+        self.assertIsNone(target.alias)
+
+        items = build_auto_candidates(
+            requested_model='github/gpt-4o',
+            configured=['groq', 'gemini'],
+            health={'github/gpt-4o': {'ok': True, 'checked_at': 120}},
+            now_ts=150,
+            ttl_seconds=60,
+        )
+        self.assertTrue(items)
+        self.assertTrue(all(item.provider != 'github' for item in items))
+        self.assertTrue(all('models.github.ai' not in item.model for item in items))
+        self.assertEqual(items[0].provider, 'groq')
+
     def test_build_auto_candidates_prefers_requested_then_health_then_hints(self) -> None:
         health = {
-            'github/gpt-4o': {'ok': True, 'checked_at': 120},
+            'mistral/mistral-large-latest': {'ok': True, 'checked_at': 120},
         }
         items = build_auto_candidates(
-            requested_model='github/gpt-4o-mini',
-            configured=['github', 'openrouter'],
+            requested_model='mistral/mistral-medium-latest',
+            configured=['mistral', 'openrouter'],
             health=health,
             now_ts=150,
             ttl_seconds=60,
@@ -96,9 +122,9 @@ class ProviderRoutingTests(unittest.TestCase):
         self.assertEqual(
             items[:3],
             [
-                CandidateTarget('github', 'gpt-4o-mini', 'user_requested', 0),
-                CandidateTarget('github', 'gpt-4o', 'health_boosted', 1),
-                CandidateTarget('github', 'gpt-4.1-mini', 'provider_default', 2),
+                CandidateTarget('mistral', 'mistral-medium-latest', 'user_requested', 0),
+                CandidateTarget('mistral', 'mistral-large-latest', 'health_boosted', 1),
+                CandidateTarget('mistral', 'mistral-small-latest', 'provider_default', 2),
             ],
         )
 

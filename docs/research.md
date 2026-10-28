@@ -45,7 +45,7 @@
   - 统一 HTTP 传输
   - 处理 OpenAI / Gemini 协议差异
   - 保留 OpenRouter 免费模型过滤、Ofox `:free` 过滤、Gemini 文本模型过滤
-  - GitHub / Groq / NVIDIA / Ofox / AMD 在 `/models` 失败或返回空列表时回退 `model_hints`
+  - Groq / NVIDIA / Ofox / AMD 在 `/models` 失败或返回空列表时回退 `model_hints`
 
 ### 3.4 Service
 

@@ -379,15 +379,44 @@ class ClientTests(unittest.TestCase):
         adapter = ProviderAdapter(provider=provider, api_key='x', transport=transport)
         self.assertEqual(adapter.list_models(), ['openrouter/auto:free', 'zero-cost'])
 
-    def test_github_uses_preview_version(self) -> None:
-        provider = get_provider('github')
-        transport = FakeTransport({
-            ('GET', 'https://models.github.ai/inference/models?api-version=2024-12-01-preview'): (404, {}, b'not found'),
-            ('POST', 'https://models.github.ai/inference/chat/completions?api-version=2024-12-01-preview'): (200, {}, json.dumps({'choices': [{'message': {'content': 'ok'}}]}).encode()),
-        })
-        adapter = ProviderAdapter(provider=provider, api_key='x', transport=transport)
-        self.assertEqual(adapter.list_models(), ['gpt-4o', 'gpt-4o-mini', 'gpt-4.1-mini', 'DeepSeek-V3-0324'])
-        self.assertEqual(adapter.chat_text('gpt-4o-mini', 'ok'), 'ok')
+    def test_auto_does_not_request_github_models(self) -> None:
+        from python_scripts.openai_relay import OpenAIRelay
+        from python_scripts.request_normalizer import ChatRequest
+
+        transport = StreamingTransport()
+        relay = OpenAIRelay(
+            adapter_factory=lambda provider: ProviderAdapter(provider=get_provider(provider), api_key='x', transport=transport),
+            health_loader=lambda: {
+                'github/gpt-4o': {'ok': True, 'checked_at': int(time.time()), 'success_streak': 9, 'failure_streak': 0},
+            },
+            preferred_model_loader=lambda: 'github/gpt-4o',
+            health_ttl_seconds=60,
+            configured_providers_loader=lambda: ['groq', 'gemini'],
+        )
+        request = ChatRequest(
+            'free-proxy/auto',
+            'github/gpt-4o-mini',
+            [{'role': 'user', 'content': 'hi'}],
+            True,
+            None,
+            None,
+            {
+                'model': 'free-proxy/auto',
+                'requested_model': 'github/gpt-4o-mini',
+                'messages': [{'role': 'user', 'content': 'hi'}],
+                'stream': True,
+            },
+        )
+
+        response = relay.handle_chat(request)
+
+        self.assertEqual(response.status, 200)
+        self.assertTrue(transport.requests)
+        for _method, url, headers, _body, _timeout in transport.requests:
+            self.assertNotIn('models.github.ai', url)
+            self.assertTrue(url.startswith('https://api.groq.com/'))
+            header_names = {str(key).lower() for key in (headers or {})}
+            self.assertNotIn('x-github-api-version', header_names)
 
     def test_groq_model_hint_fallback_on_list_error(self) -> None:
         provider = get_provider('groq')
