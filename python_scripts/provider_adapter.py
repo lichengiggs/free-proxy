@@ -13,7 +13,7 @@ from .response_normalizer import sanitize_model_text
 from .request_limiter import RequestLimiterGate
 
 JsonObject = dict[str, object]
-_HINT_FALLBACK_PROVIDERS = frozenset({'groq', 'nvidia', 'ofox', 'amd'})
+_HINT_FALLBACK_PROVIDERS = frozenset({'groq', 'nvidia', 'amd'})
 _AMD_NON_CHAT_MODEL_IDS = frozenset({'MinerU2.5-Pro', 'OmniVoice', 'Clef', 'd3', 'd3-flash'})
 
 
@@ -196,8 +196,6 @@ class ProviderAdapter:
             if not isinstance(raw_model_id, str) or not raw_model_id.strip():
                 continue
             if self.provider.name == 'openrouter' and not self._is_openrouter_free_model(item, raw_model_id):
-                continue
-            if self.provider.name == 'ofox' and not raw_model_id.endswith(':free'):
                 continue
             if self.provider.name == 'gemini' and not self._is_supported_gemini_text_model(item, raw_model_id):
                 continue

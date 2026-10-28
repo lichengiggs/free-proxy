@@ -165,7 +165,9 @@ class ServerApiTests(unittest.TestCase):
         self.assertEqual(resp.status_code, 200)
         self.assertIn('text/html', resp.headers.get('content-type', ''))
         self.assertIn('free-proxy 控制台', resp.text)
-        self.assertIn('Ofox', resp.text)
+        self.assertIn('Groq', resp.text)
+        self.assertNotIn('Ofox', resp.text)
+        self.assertNotIn('OFOX_API_KEY', resp.text)
 
     def test_serve_parser_accepts_debug_flag(self) -> None:
         args = build_parser().parse_args(['serve', '--debug'])

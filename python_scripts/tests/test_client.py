@@ -428,45 +428,129 @@ class ClientTests(unittest.TestCase):
         self.assertEqual(adapter.list_models(), ['llama-3.1-8b-instant', 'llama-3.3-70b-versatile'])
         self.assertEqual(adapter.chat_text('llama-3.1-8b-instant', 'ok'), 'ok')
 
-    def test_ofox_only_keeps_free_suffix_models(self) -> None:
-        provider = get_provider('ofox')
-        transport = FakeTransport({
-            ('GET', 'https://api.ofox.ai/v1/models'): (
-                200,
-                {},
-                json.dumps({'data': [
-                    {'id': 'z-ai/glm-4.7-flash:free'},
-                    {'id': 'z-ai/glm-4.7'},
-                ]}).encode(),
-            ),
-        })
-        adapter = ProviderAdapter(provider=provider, api_key='x', transport=transport)
-        self.assertEqual(adapter.list_models(), ['z-ai/glm-4.7-flash:free'])
+    def test_auto_does_not_request_ofox(self) -> None:
+        from python_scripts.openai_relay import OpenAIRelay
+        from python_scripts.provider_routing import build_auto_candidates
+        from python_scripts.request_normalizer import ChatRequest
 
-    def test_ofox_model_hint_fallback_on_list_error(self) -> None:
-        provider = get_provider('ofox')
-        transport = FakeTransport({
-            ('GET', 'https://api.ofox.ai/v1/models'): (503, {}, json.dumps({'error': {'message': 'unavailable'}}).encode()),
-            ('POST', 'https://api.ofox.ai/v1/chat/completions'): (200, {}, json.dumps({'choices': [{'message': {'content': 'ok'}}]}).encode()),
-        })
-        adapter = ProviderAdapter(provider=provider, api_key='x', transport=transport)
-        self.assertEqual(adapter.list_models(), ['z-ai/glm-4.7-flash:free'])
-        self.assertEqual(adapter.chat_text('z-ai/glm-4.7-flash:free', 'ok'), 'ok')
+        now = int(time.time())
+        candidates = build_auto_candidates(
+            requested_model='ofox/z-ai/glm-4.7-flash:free',
+            configured=['groq', 'gemini'],
+            health={
+                'ofox/z-ai/glm-4.7-flash:free': {
+                    'ok': True,
+                    'checked_at': now,
+                    'success_streak': 9,
+                    'failure_streak': 0,
+                },
+            },
+            now_ts=now,
+            ttl_seconds=60,
+        )
+        self.assertTrue(candidates)
+        self.assertTrue(all(item.provider != 'ofox' for item in candidates))
+        self.assertTrue(all('api.ofox.ai' not in item.model for item in candidates))
 
-    def test_ofox_falls_back_to_hint_when_models_response_has_no_free_items(self) -> None:
-        provider = get_provider('ofox')
-        transport = FakeTransport({
-            ('GET', 'https://api.ofox.ai/v1/models'): (
-                200,
-                {},
-                json.dumps({'data': [
-                    {'id': 'z-ai/glm-4.7'},
-                    {'id': 'z-ai/glm-4.7-pro'},
-                ]}).encode(),
-            ),
-        })
-        adapter = ProviderAdapter(provider=provider, api_key='x', transport=transport)
-        self.assertEqual(adapter.list_models(), ['z-ai/glm-4.7-flash:free'])
+        transport = StreamingTransport()
+        relay = OpenAIRelay(
+            adapter_factory=lambda provider: ProviderAdapter(provider=get_provider(provider), api_key='x', transport=transport),
+            health_loader=lambda: {
+                'ofox/z-ai/glm-4.7-flash:free': {
+                    'ok': True,
+                    'checked_at': now,
+                    'success_streak': 9,
+                    'failure_streak': 0,
+                },
+            },
+            preferred_model_loader=lambda: 'ofox/z-ai/glm-4.7-flash:free',
+            health_ttl_seconds=60,
+            configured_providers_loader=lambda: ['groq', 'gemini'],
+        )
+        request = ChatRequest(
+            'free-proxy/auto',
+            None,
+            [{'role': 'user', 'content': 'hi'}],
+            True,
+            None,
+            None,
+            {
+                'model': 'free-proxy/auto',
+                'messages': [{'role': 'user', 'content': 'hi'}],
+                'stream': True,
+            },
+        )
+
+        response = relay.handle_chat(request)
+
+        self.assertEqual(response.status, 200)
+        self.assertTrue(transport.requests)
+        for _method, url, _headers, _body, _timeout in transport.requests:
+            self.assertNotIn('api.ofox.ai', url)
+            self.assertTrue(url.startswith('https://api.groq.com/'))
+
+    def test_explicit_ofox_model_follows_unknown_provider_rule(self) -> None:
+        from python_scripts.openai_relay import OpenAIRelay
+        from python_scripts.provider_catalog import PROVIDERS
+        from python_scripts.provider_routing import build_auto_candidates, resolve_model_request
+        from python_scripts.request_normalizer import ChatRequest
+
+        known = {provider.name for provider in PROVIDERS}
+        target = resolve_model_request(
+            model='ofox/z-ai/glm-4.7-flash:free',
+            provider=None,
+            configured=['groq', 'gemini'],
+            known_providers=known,
+        )
+        self.assertEqual(target.provider, 'groq')
+        self.assertEqual(target.model, 'ofox/z-ai/glm-4.7-flash:free')
+        self.assertIsNone(target.alias)
+
+        now = int(time.time())
+        items = build_auto_candidates(
+            requested_model='ofox/z-ai/glm-4.7-flash:free',
+            configured=['groq', 'gemini'],
+            health={'ofox/z-ai/glm-4.7-flash:free': {'ok': True, 'checked_at': now}},
+            now_ts=now,
+            ttl_seconds=60,
+        )
+        self.assertTrue(items)
+        self.assertTrue(all(item.provider != 'ofox' for item in items))
+        self.assertTrue(all('api.ofox.ai' not in item.model for item in items))
+        self.assertEqual(items[0].provider, 'groq')
+
+        transport = StreamingTransport()
+        relay = OpenAIRelay(
+            adapter_factory=lambda provider: ProviderAdapter(provider=get_provider(provider), api_key='x', transport=transport),
+            health_loader=lambda: {
+                'ofox/z-ai/glm-4.7-flash:free': {'ok': True, 'checked_at': now, 'success_streak': 9, 'failure_streak': 0},
+            },
+            preferred_model_loader=lambda: None,
+            health_ttl_seconds=60,
+            configured_providers_loader=lambda: ['groq', 'gemini'],
+        )
+        request = ChatRequest(
+            'free-proxy/auto',
+            'ofox/z-ai/glm-4.7-flash:free',
+            [{'role': 'user', 'content': 'hi'}],
+            True,
+            None,
+            None,
+            {
+                'model': 'free-proxy/auto',
+                'requested_model': 'ofox/z-ai/glm-4.7-flash:free',
+                'messages': [{'role': 'user', 'content': 'hi'}],
+                'stream': True,
+            },
+        )
+
+        response = relay.handle_chat(request)
+
+        self.assertEqual(response.status, 200)
+        self.assertTrue(transport.requests)
+        for _method, url, _headers, _body, _timeout in transport.requests:
+            self.assertNotIn('api.ofox.ai', url)
+            self.assertTrue(url.startswith('https://api.groq.com/'))
 
     def test_gemini_normalizes_models_and_chat_text(self) -> None:
         provider = get_provider('gemini')
