@@ -10,18 +10,19 @@ from python_scripts.provider_catalog import PROVIDERS, configured_provider_names
 class ProviderCatalogTests(unittest.TestCase):
     def tearDown(self) -> None:
         os.environ.pop('GEMINI_API_KEY', None)
-        os.environ.pop('OFOX_API_KEY', None)
 
     def test_get_provider_returns_catalog_item(self) -> None:
         provider = get_provider('openrouter')
         self.assertEqual(provider.name, 'openrouter')
         self.assertEqual(provider.api_key_env, 'OPENROUTER_API_KEY')
 
-    def test_get_provider_returns_ofox_catalog_item(self) -> None:
-        provider = get_provider('ofox')
-        self.assertEqual(provider.name, 'ofox')
-        self.assertEqual(provider.base_url, 'https://api.ofox.ai/v1')
-        self.assertEqual(provider.api_key_env, 'OFOX_API_KEY')
+    def test_get_provider_treats_ofox_as_unknown(self) -> None:
+        with self.assertRaises(KeyError):
+            get_provider('ofox')
+        self.assertTrue(all(provider.name != 'ofox' for provider in PROVIDERS))
+        self.assertTrue(all('api.ofox.ai' not in provider.base_url for provider in PROVIDERS))
+        self.assertTrue(all(provider.api_key_env != 'OFOX_API_KEY' for provider in PROVIDERS))
+        self.assertTrue(all('z-ai/glm-4.7-flash:free' not in provider.model_hints for provider in PROVIDERS))
 
     def test_get_provider_returns_amd_catalog_item(self) -> None:
         provider = get_provider('amd')
@@ -44,13 +45,19 @@ class ProviderCatalogTests(unittest.TestCase):
     def test_configured_provider_names_reads_env_from_catalog(self) -> None:
         names = configured_provider_names({
             'GEMINI_API_KEY': 'y',
-            'OFOX_API_KEY': 'z',
+            'GROQ_API_KEY': 'z',
+            'OFOX_API_KEY': 'leftover',
             'LONGCAT_API_KEY': 'x',
             'GITHUB_MODELS_API_KEY': 'g',
         })
-        self.assertEqual(names, ['ofox', 'gemini'])
+        self.assertEqual(names, ['groq', 'gemini'])
+        self.assertNotIn('ofox', names)
         self.assertNotIn('longcat', names)
         self.assertNotIn('github', names)
+
+    def test_ofox_api_key_does_not_configure_any_provider(self) -> None:
+        names = configured_provider_names({'OFOX_API_KEY': 'z'})
+        self.assertEqual(names, [])
 
     def test_longcat_api_key_does_not_configure_any_provider(self) -> None:
         names = configured_provider_names({'LONGCAT_API_KEY': 'x'})
@@ -78,6 +85,14 @@ class ProviderCatalogTests(unittest.TestCase):
         self.assertNotIn('GitHub Models', html)
         self.assertNotIn('GITHUB_MODELS_API_KEY', html)
         self.assertNotIn("id: 'github'", html)
+
+    def test_console_no_longer_shows_ofox_card(self) -> None:
+        html = Path(__file__).resolve().parents[1].joinpath('web', 'index.html').read_text(encoding='utf-8')
+        self.assertNotIn('Ofox', html)
+        self.assertNotIn('OFOX_API_KEY', html)
+        self.assertNotIn("id: 'ofox'", html)
+        self.assertNotIn('api.ofox.ai', html)
+        self.assertNotIn('ofox.ai', html)
 
     def test_all_providers_have_required_fields(self) -> None:
         for p in PROVIDERS:

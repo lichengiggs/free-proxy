@@ -16,7 +16,7 @@
 - 一个稳定模型别名：`free-proxy/auto`
 - 多 provider 自动回退，某家失败时可切到其他可用模型
 - 本地 Web 页面配置 API Key，不用手改复杂配置
-- 控制台可配置的 provider：OpenRouter / Groq / Ofox / Gemini / Mistral / SambaNova / NVIDIA NIM / AMD Token Factory
+- 控制台可配置的 provider：OpenRouter / Groq / Gemini / Mistral / SambaNova / NVIDIA NIM / AMD Token Factory
 
 ## 当前稳定接口
 
@@ -70,7 +70,6 @@ uv run free-proxy serve
 |---|---|---|---|
 | OpenRouter | `openrouter/auto:free` | 免费模型入口 | 模型列表只保留免费模型 |
 | Groq | `llama-3.1-8b-instant` | 补充选择 | 也可以选 `llama-3.3-70b-versatile` |
-| Ofox | `z-ai/glm-4.7-flash:free` | 免费模型补充 | 模型列表只保留以 `:free` 结尾的模型 |
 | Gemini | `gemini-3.1-flash-lite-preview` | 免费层回退 | 免费层稳定，适合回退 |
 | Mistral | `mistral-large-latest` | 稳定后备 | 质量稳，适合补位 |
 | SambaNova | `DeepSeek-V3.1-Terminus` | 补充选择 | 适合作为额外后备 |

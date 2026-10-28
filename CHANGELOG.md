@@ -4,6 +4,7 @@
 - remove `free-proxy/coding`, use `free-proxy/auto` instead
 - `/v1/models` now returns only `free-proxy/auto`
 - console and catalog no longer offer GitHub Models
+- console and catalog no longer offer Ofox
 - console no longer provides OpenClaw configuration
 
 ### Added
