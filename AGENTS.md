@@ -73,7 +73,7 @@
 - commit message 用英文、小写开头、祈使句，首行只写一件事，不加句号。
 - 推荐格式：`<verb> <scope> <intent>`
 - 常用动词：`refine`、`fix`、`add`、`remove`、`align`、`document`、`test`
-- scope 优先写真实改动面：`python console ui`、`provider routing`、`openclaw config`、`docs`、`tests`
+- scope 优先写真实改动面：`python console ui`、`provider routing`、`docs`、`tests`
 - intent 直接写用户可感知结果或技术结果：`fix chat truncation`、`align sdk docs`、`simplify provider cards`
 - 避免空泛 message：`update files`、`misc fixes`、`wip`、`tmp`
 - 若同时包含“界面整理 + 缺陷修复”，优先把用户影响更大的结果写进 message，例如：`refine python console ui and fix chat truncation`
@@ -90,9 +90,8 @@
 ## 文档维护
 
 - 复杂功能或重构先写执行计划。执行计划属于过程文档，任务完成后应清理；结论沉淀到长期文档。
-- 用户文档必须优先覆盖三条真实使用路径，模型都用 `free-proxy/auto`：
+- 用户文档必须优先覆盖两条真实使用路径，模型都用 `free-proxy/auto`：
   - OpenAI / Python SDK：`base_url` 为 `http://127.0.0.1:8765/v1`
-  - OpenClaw：写入 `~/.openclaw/openclaw.json`，provider `free-proxy`，`baseUrl` 为 `http://localhost:8765/v1`，模型 id 为 `auto`
   - Opencode：写入 `~/.config/opencode/opencode.json`，provider `free-proxy`，`baseURL` 为 `http://127.0.0.1:8765/v1`，模型 id 为 `auto`
 
 ## 本地 agent pipeline

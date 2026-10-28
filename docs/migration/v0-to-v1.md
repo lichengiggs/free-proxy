@@ -56,12 +56,6 @@ With:
 
 When `python_scripts/opencode_config.py` rewrites local config, it now keeps only `auto` and removes legacy `coding` entries.
 
-## OpenClaw
-
-Replace default or fallback values that point to `free-proxy/coding` with `free-proxy/auto`.
-
-When `python_scripts/openclaw_config.py` rewrites local config, it now keeps only `auto` and removes legacy `coding` entries from defaults and fallbacks.
-
 ## SDK
 
 Replace:

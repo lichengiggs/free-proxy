@@ -14,7 +14,6 @@ from fastapi.staticfiles import StaticFiles
 
 from .config import settings
 from .opencode_config import configure_opencode_provider, detect_opencode_config
-from .openclaw_config import configure_openclaw_model, detect_openclaw_config, list_backups, restore_backup
 from .provider_errors import ProviderError
 from .service import ProxyService
 
@@ -156,19 +155,9 @@ async def recommended_models(provider: str, model: str | None = None):
     return {'provider': provider, 'items': items}
 
 
-@app.get('/api/detect-openclaw')
-async def detect_openclaw():
-    return detect_openclaw_config()
-
-
 @app.get('/api/detect-opencode')
 async def detect_opencode():
     return detect_opencode_config()
-
-
-@app.get('/api/backups')
-async def list_backups_route():
-    return {'backups': list_backups()}
 
 
 @app.get('/providers')
@@ -194,31 +183,6 @@ async def verify_provider_key(provider: str):
     return JSONResponse(result, status_code=200 if result.get('ok') else 400)
 
 
-@app.post('/api/configure-openclaw')
-async def configure_openclaw(request: Request):
-    payload, error_response = await _read_json_payload(request)
-    if error_response is not None:
-        return error_response
-    mode = str(payload.get('mode', '')).strip()
-    if mode not in {'default', 'fallback'}:
-        return JSONResponse({'success': False, 'error': 'Invalid mode'}, status_code=400)
-    svc = get_service()
-    statuses = svc.provider_key_statuses()
-    has_any_configured = any(bool(item.get('configured')) for item in statuses.values())
-    if not has_any_configured:
-        return JSONResponse({'success': False, 'error': 'Please configure at least one provider API key first'}, status_code=400)
-    raw_port = os.environ.get('PORT', str(settings.port)).strip()
-    try:
-        port = int(raw_port)
-    except ValueError:
-        port = settings.port
-    result = configure_openclaw_model(mode, port=port)
-    if not result.get('success'):
-        return JSONResponse(result, status_code=400)
-    message = '已设为 OpenClaw 默认模型' if mode == 'default' else '已加入 OpenClaw 备用模型'
-    return {'success': True, 'backup': result.get('backup'), 'message': message}
-
-
 @app.post('/api/configure-opencode')
 async def configure_opencode(request: Request):
     svc = get_service()
@@ -235,20 +199,6 @@ async def configure_opencode(request: Request):
     if not result.get('success'):
         return JSONResponse(result, status_code=400)
     return {'success': True, 'backup': result.get('backup'), 'message': '已写入 Opencode free-proxy provider'}
-
-
-@app.post('/api/restore-backup')
-async def restore_backup_route(request: Request):
-    payload, error_response = await _read_json_payload(request)
-    if error_response is not None:
-        return error_response
-    backup = str(payload.get('backup', '')).strip()
-    if not backup:
-        return JSONResponse({'success': False, 'error': 'Backup filename is required'}, status_code=400)
-    result = restore_backup(backup)
-    if not result.get('success'):
-        return JSONResponse(result, status_code=400)
-    return {'success': True, 'message': 'Restore successful'}
 
 
 @app.post('/api/provider-keys/{provider}')
