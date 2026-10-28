@@ -52,13 +52,6 @@ PROVIDERS: tuple[ProviderMeta, ...] = (
         model_hints=('mistral-large-latest', 'mistral-medium-latest', 'mistral-small-latest'),
     ),
     ProviderMeta(
-        'sambanova',
-        'https://api.sambanova.ai/v1',
-        'SAMBANOVA_API_KEY',
-        'openai',
-        model_hints=('DeepSeek-V3.1-Terminus', 'Qwen3-235B', 'Meta-Llama-3.1-8B-Instruct'),
-    ),
-    ProviderMeta(
         'nvidia',
         'https://integrate.api.nvidia.com/v1',
         'NVIDIA_API_KEY',

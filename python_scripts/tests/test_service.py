@@ -376,7 +376,6 @@ class ServiceTests(unittest.TestCase):
             'OPENROUTER_API_KEY',
             'LONGCAT_API_KEY',
             'GEMINI_API_KEY',
-            'SAMBANOVA_API_KEY',
         ]
         self.old_values = {key: os.environ.get(key) for key in self.env_keys}
         os.environ['OPENROUTER_API_KEY'] = 'test'

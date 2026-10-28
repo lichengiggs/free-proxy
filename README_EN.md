@@ -16,7 +16,7 @@ This project is best for:
 - One stable model alias: `free-proxy/auto`
 - Automatic provider fallback when one model fails
 - A local web page for API key setup, so you do not need to edit config files by hand
-- Providers you can configure in the console: OpenRouter / Groq / Gemini / Mistral / SambaNova / NVIDIA NIM / AMD Token Factory
+- Providers you can configure in the console: OpenRouter / Groq / Gemini / Mistral / NVIDIA NIM / AMD Token Factory
 
 ## Stable public surface
 
@@ -72,7 +72,6 @@ Save any provider key with free quota, then use `free-proxy/auto`.
 | Groq | `llama-3.1-8b-instant` | extra option | `llama-3.3-70b-versatile` is also built in |
 | Gemini | `gemini-3.1-flash-lite-preview` | backup option | stable free tier fallback |
 | Mistral | `mistral-large-latest` | stable backup | strong fallback quality |
-| SambaNova | `DeepSeek-V3.1-Terminus` | extra option | useful as another fallback |
 | NVIDIA NIM | `meta/llama-3.1-70b-instruct` | extra option | this is the current built-in recommendation |
 | AMD Token Factory | `DeepSeek-V4-Flash` | extra option | supplementary choice in the free quota |
 

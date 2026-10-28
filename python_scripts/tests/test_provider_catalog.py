@@ -49,11 +49,13 @@ class ProviderCatalogTests(unittest.TestCase):
             'OFOX_API_KEY': 'leftover',
             'LONGCAT_API_KEY': 'x',
             'GITHUB_MODELS_API_KEY': 'g',
+            'SAMBANOVA_API_KEY': 'sn',
         })
         self.assertEqual(names, ['groq', 'gemini'])
         self.assertNotIn('ofox', names)
         self.assertNotIn('longcat', names)
         self.assertNotIn('github', names)
+        self.assertNotIn('sambanova', names)
 
     def test_ofox_api_key_does_not_configure_any_provider(self) -> None:
         names = configured_provider_names({'OFOX_API_KEY': 'z'})
@@ -68,6 +70,87 @@ class ProviderCatalogTests(unittest.TestCase):
             get_provider('longcat')
         self.assertTrue(all(provider.name != 'longcat' for provider in PROVIDERS))
         self.assertTrue(all('api.longcat.chat' not in provider.base_url for provider in PROVIDERS))
+
+    def test_sambanova_api_key_does_not_configure_any_provider(self) -> None:
+        names = configured_provider_names({'SAMBANOVA_API_KEY': 'sn'})
+        self.assertEqual(names, [])
+
+    def test_get_provider_treats_sambanova_as_unknown(self) -> None:
+        with self.assertRaises(KeyError):
+            get_provider('sambanova')
+        self.assertTrue(all(provider.name != 'sambanova' for provider in PROVIDERS))
+        self.assertTrue(all(provider.base_url != 'https://api.sambanova.ai/v1' for provider in PROVIDERS))
+        self.assertTrue(all('api.sambanova.ai' not in provider.base_url for provider in PROVIDERS))
+        self.assertTrue(all(provider.api_key_env != 'SAMBANOVA_API_KEY' for provider in PROVIDERS))
+        for hint in ('DeepSeek-V3.1-Terminus', 'Qwen3-235B', 'Meta-Llama-3.1-8B-Instruct'):
+            self.assertTrue(all(hint not in provider.model_hints for provider in PROVIDERS))
+
+    def test_console_no_longer_shows_sambanova_card(self) -> None:
+        html = Path(__file__).resolve().parents[1].joinpath('web', 'index.html').read_text(encoding='utf-8')
+        self.assertNotIn('SambaNova', html)
+        self.assertNotIn('SAMBANOVA_API_KEY', html)
+        self.assertNotIn("id: 'sambanova'", html)
+        self.assertNotIn('api.sambanova.ai', html)
+        self.assertNotIn('cloud.sambanova.ai', html)
+
+    def test_auto_candidates_exclude_sambanova_when_another_provider_is_configured(self) -> None:
+        from python_scripts.provider_routing import build_auto_candidates, resolve_alias_candidates, resolve_model_request
+
+        configured = configured_provider_names({
+            'GROQ_API_KEY': 'groq-key',
+            'SAMBANOVA_API_KEY': 'leftover',
+        })
+        self.assertEqual(configured, ['groq'])
+        known = {provider.name for provider in PROVIDERS}
+        target = resolve_model_request(
+            model='free-proxy/auto',
+            provider=None,
+            configured=configured,
+            known_providers=known,
+        )
+        self.assertEqual(target.alias, 'auto')
+
+        candidates = resolve_alias_candidates('auto', configured=configured)
+        self.assertTrue(candidates)
+        self.assertTrue(all(provider != 'sambanova' for provider, _model in candidates))
+        for provider_name, _model in candidates:
+            self.assertNotIn('api.sambanova.ai', get_provider(provider_name).base_url)
+
+        items = build_auto_candidates(
+            requested_model=None,
+            configured=configured,
+            health={'sambanova/DeepSeek-V3.1-Terminus': {'ok': True, 'checked_at': 120}},
+            now_ts=150,
+            ttl_seconds=60,
+        )
+        self.assertTrue(items)
+        self.assertTrue(all(item.provider != 'sambanova' for item in items))
+        for item in items:
+            self.assertNotIn('api.sambanova.ai', get_provider(item.provider).base_url)
+
+        explicit = resolve_model_request(
+            model='sambanova/DeepSeek-V3.1-Terminus',
+            provider=None,
+            configured=configured,
+            known_providers=known,
+        )
+        self.assertEqual(explicit.provider, 'groq')
+        self.assertEqual(explicit.model, 'sambanova/DeepSeek-V3.1-Terminus')
+        self.assertIsNone(explicit.alias)
+        self.assertNotIn('api.sambanova.ai', get_provider(explicit.provider).base_url)
+
+        routed = build_auto_candidates(
+            requested_model='sambanova/DeepSeek-V3.1-Terminus',
+            configured=configured,
+            health={'sambanova/DeepSeek-V3.1-Terminus': {'ok': True, 'checked_at': 120}},
+            now_ts=150,
+            ttl_seconds=60,
+        )
+        self.assertTrue(routed)
+        self.assertEqual(routed[0].provider, 'groq')
+        self.assertTrue(all(item.provider != 'sambanova' for item in routed))
+        for item in routed:
+            self.assertNotIn('api.sambanova.ai', get_provider(item.provider).base_url)
 
     def test_github_models_key_does_not_configure_any_provider(self) -> None:
         names = configured_provider_names({'GITHUB_MODELS_API_KEY': 'x'})

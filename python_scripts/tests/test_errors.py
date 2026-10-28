@@ -24,4 +24,4 @@ class ErrorTests(unittest.TestCase):
     def test_remediation_suggestion_returns_actionable_text(self) -> None:
         self.assertIn('API Key', remediation_suggestion('auth', 'groq'))
         self.assertIn('额度', remediation_suggestion('quota', 'openrouter'))
-        self.assertIn('模型', remediation_suggestion('model_not_found', 'sambanova'))
+        self.assertIn('模型', remediation_suggestion('model_not_found', 'mistral'))
