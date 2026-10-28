@@ -16,7 +16,7 @@
 ### Changed
 - skip cooled providers and models on `free-proxy/auto` instead of calling upstreams that already failed
 - route `/v1/chat/completions` through a unified relay pipeline instead of scattered service/server logic
-- lazily load provider-listed fallback models immediately after the failed static default for the same provider
+- `free-proxy/auto` 优先复用上次打通的模型，并在同一次请求里刷新 provider 列表。
 - migrate OpenCode config output to `auto` only while cleaning legacy `coding` entries
 
 ### Fixed

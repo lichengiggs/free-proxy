@@ -30,7 +30,7 @@ class ProviderCatalogTests(unittest.TestCase):
         self.assertEqual(provider.base_url, 'https://developer.amd.com.cn/radeon/api/v1')
         self.assertEqual(provider.api_key_env, 'AMD_API_KEY')
         self.assertEqual(provider.format, 'openai')
-        self.assertEqual(provider.model_hints, ('DeepSeek-V4-Flash', 'MiniCPM5-2B'))
+        self.assertEqual(provider.model_hints, ('DeepSeek-V4-Flash',))
         self.assertEqual(PROVIDERS[-1].name, 'amd')
 
     def test_amd_api_key_configures_amd(self) -> None:
@@ -187,4 +187,18 @@ class ProviderCatalogTests(unittest.TestCase):
     def test_model_hints_returns_list(self) -> None:
         from python_scripts.provider_catalog import get_provider_model_hints
         hints = get_provider_model_hints('groq')
-        self.assertEqual(hints, ['llama-3.1-8b-instant', 'llama-3.3-70b-versatile'])
+        self.assertEqual(len(hints), 1)
+        self.assertEqual(hints, ['llama-3.1-8b-instant'])
+
+    def test_each_provider_model_hints_keeps_only_the_first_entry(self) -> None:
+        expected = {
+            'openrouter': ('openrouter/auto:free',),
+            'groq': ('llama-3.1-8b-instant',),
+            'gemini': ('gemini-3.1-flash-lite-preview',),
+            'mistral': ('mistral-large-latest',),
+            'nvidia': ('meta/llama-3.1-70b-instruct',),
+            'amd': ('DeepSeek-V4-Flash',),
+        }
+        self.assertEqual({item.name: item.model_hints for item in PROVIDERS}, expected)
+        for item in PROVIDERS:
+            self.assertEqual(len(item.model_hints), 1)
