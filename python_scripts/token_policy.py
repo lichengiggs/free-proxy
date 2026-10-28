@@ -16,7 +16,6 @@ DEFAULT_POLICY = {
     'openrouter': TokenPolicy(max_input_chars=16000, reserve_output_tokens=512),
     'gemini': TokenPolicy(max_input_chars=24000, reserve_output_tokens=1024),
     'mistral': TokenPolicy(max_input_chars=24000, reserve_output_tokens=1024),
-    'sambanova': TokenPolicy(max_input_chars=24000, reserve_output_tokens=1024),
 }
 
 PROBE_OUTPUT_TOKENS = 32
