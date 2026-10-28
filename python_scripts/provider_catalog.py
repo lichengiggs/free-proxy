@@ -35,21 +35,21 @@ PROVIDERS: tuple[ProviderMeta, ...] = (
         'https://api.groq.com/openai/v1',
         'GROQ_API_KEY',
         'openai',
-        model_hints=('llama-3.1-8b-instant', 'llama-3.3-70b-versatile'),
+        model_hints=('llama-3.1-8b-instant',),
     ),
     ProviderMeta(
         'gemini',
         'https://generativelanguage.googleapis.com/v1beta',
         'GEMINI_API_KEY',
         'gemini',
-        model_hints=('gemini-3.1-flash-lite-preview', 'gemini-2.0-flash'),
+        model_hints=('gemini-3.1-flash-lite-preview',),
     ),
     ProviderMeta(
         'mistral',
         'https://api.mistral.ai/v1',
         'MISTRAL_API_KEY',
         'openai',
-        model_hints=('mistral-large-latest', 'mistral-medium-latest', 'mistral-small-latest'),
+        model_hints=('mistral-large-latest',),
     ),
     ProviderMeta(
         'nvidia',
@@ -63,7 +63,7 @@ PROVIDERS: tuple[ProviderMeta, ...] = (
         'https://developer.amd.com.cn/radeon/api/v1',
         'AMD_API_KEY',
         'openai',
-        model_hints=('DeepSeek-V4-Flash', 'MiniCPM5-2B'),
+        model_hints=('DeepSeek-V4-Flash',),
     ),
 )
 

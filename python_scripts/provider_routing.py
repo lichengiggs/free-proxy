@@ -71,28 +71,139 @@ def candidate_in_cooldown(health: HealthState, provider: str, model: str, now_ts
     return False
 
 
-def _health_score(entry: dict[str, object], now_ts: int, ttl_seconds: int) -> int:
-    checked_at_value = entry.get('checked_at')
-    if not isinstance(checked_at_value, int):
-        return 0
-    age = max(0, now_ts - checked_at_value)
-    if age > ttl_seconds:
-        return 0
+_SAMBANOVA_LIST_PRIORITY: tuple[str, ...] = (
+    'gpt-oss-120b',
+    'DeepSeek-V3.1',
+    'Meta-Llama-3.3-70B-Instruct',
+)
+_GEMINI_REJECTED_TOKENS = frozenset({'pro', 'argon'})
 
-    success_streak = entry.get('success_streak')
-    failure_streak = entry.get('failure_streak')
-    score = 0
-    if entry.get('ok') is True:
-        score += 1000
-        if isinstance(success_streak, int):
-            score += success_streak * 50
-        score -= age
-    else:
-        score -= 1000
-        if isinstance(failure_streak, int):
-            score -= failure_streak * 50
-        score -= age
-    return score
+
+def _model_id_tokens(model_id: str) -> set[str]:
+    tokens: list[str] = []
+    current: list[str] = []
+    for char in model_id.lower():
+        if char.isalnum():
+            current.append(char)
+            continue
+        if current:
+            tokens.append(''.join(current))
+            current = []
+    if current:
+        tokens.append(''.join(current))
+    return set(tokens)
+
+
+def _checked_at(entry: dict[str, object]) -> int | None:
+    value = entry.get('checked_at')
+    if isinstance(value, bool) or not isinstance(value, int):
+        return None
+    return value
+
+
+def _latest_successful_model(
+    health: HealthState,
+    provider: str,
+    now_ts: int,
+    current_key_hash: str | None,
+) -> str | None:
+    prefix = f'{provider}/'
+    best_at: int | None = None
+    best_model: str | None = None
+    for key, entry in health.items():
+        if not isinstance(key, str) or not key.startswith(prefix) or not isinstance(entry, dict):
+            continue
+        if entry.get('ok') is not True:
+            continue
+        checked_at = _checked_at(entry)
+        if checked_at is None:
+            continue
+        model_id = key[len(prefix):]
+        if not model_id:
+            continue
+        if candidate_in_cooldown(health, provider, model_id, now_ts, current_key_hash):
+            continue
+        if best_at is None or checked_at >= best_at:
+            best_at = checked_at
+            best_model = model_id
+    return best_model
+
+
+def _clean_model_ids(models: list[str]) -> list[str]:
+    cleaned: list[str] = []
+    for model in models:
+        if not isinstance(model, str):
+            continue
+        text = model.strip()
+        if text:
+            cleaned.append(text)
+    return cleaned
+
+
+def _select_openrouter(models: list[str]) -> str | None:
+    if 'openrouter/free' in models:
+        return 'openrouter/free'
+    return models[0] if models else None
+
+
+def _select_gemini(models: list[str]) -> str | None:
+    eligible = [model for model in models if _GEMINI_REJECTED_TOKENS.isdisjoint(_model_id_tokens(model))]
+    for model in eligible:
+        if 'flash-lite' in model.lower():
+            return model
+    for model in eligible:
+        if 'flash' in model.lower():
+            return model
+    return eligible[0] if eligible else None
+
+
+def _select_groq(models: list[str]) -> str | None:
+    for model in models:
+        if model.startswith('openai/gpt-oss-') or model.startswith('qwen/'):
+            return model
+    return None
+
+
+def _select_sambanova(models: list[str]) -> str | None:
+    for model_id in _SAMBANOVA_LIST_PRIORITY:
+        if model_id in models:
+            return model_id
+    return models[0] if models else None
+
+
+def select_listed_model(provider: str, models: list[str]) -> str | None:
+    """Pick one refreshed auto candidate from an already filtered model list.
+
+    Args:
+        provider: Catalog provider name.
+        models: Model ids after the adapter's existing ``/models`` filter.
+
+    Returns:
+        The model to insert after a remembered success, or None when this list
+        should not contribute a candidate.
+
+    Raises:
+        None.
+    """
+    cleaned = _clean_model_ids(models)
+    if provider == 'openrouter':
+        return _select_openrouter(cleaned)
+    if provider == 'gemini':
+        return _select_gemini(cleaned)
+    if provider == 'groq':
+        return _select_groq(cleaned)
+    if provider == 'sambanova':
+        return _select_sambanova(cleaned)
+    return cleaned[0] if cleaned else None
+
+
+def _refreshed_model(provider: str, listed_models: dict[str, list[str] | None] | None) -> str | None:
+    if listed_models is None or provider not in listed_models:
+        return None
+    models = listed_models[provider]
+    if not models:
+        return None
+    return select_listed_model(provider, models)
 
 
 def resolve_model_request(
@@ -131,28 +242,21 @@ def resolve_alias_candidates(
     now_ts: int | None = None,
     ttl_seconds: int = 600,
 ) -> list[tuple[str, str]]:
-    ordered: list[tuple[str, str]] = []
     if alias != 'auto':
-        return ordered
+        return []
 
     snapshot = health or {}
     timestamp = int(time.time()) if now_ts is None else now_ts
-
-    ranked: list[tuple[int, int, str, str]] = []
-    for provider_rank, provider_name in enumerate(configured):
-        hints = get_provider_model_hints(provider_name)
-        for model_id in hints:
-            score = 0
-            entry = snapshot.get(f'{provider_name}/{model_id}')
-            if isinstance(entry, dict):
-                score = _health_score(entry, timestamp, ttl_seconds)
-            ranked.append((score, -provider_rank, provider_name, model_id))
-
-    for _, _, provider_name, model_id in sorted(ranked, key=lambda item: (item[0], item[1]), reverse=True):
-        pair = (provider_name, model_id)
-        if pair not in ordered:
-            ordered.append(pair)
-    return ordered
+    return [
+        (item.provider, item.model)
+        for item in build_auto_candidates(
+            requested_model=None,
+            configured=configured,
+            health=snapshot,
+            now_ts=timestamp,
+            ttl_seconds=ttl_seconds,
+        )
+    ]
 
 
 def build_auto_candidates(
@@ -163,7 +267,33 @@ def build_auto_candidates(
     now_ts: int,
     ttl_seconds: int,
     key_hashes: dict[str, str] | None = None,
+    listed_models: dict[str, list[str] | None] | None = None,
 ) -> list[CandidateTarget]:
+    """Build the ``free-proxy/auto`` candidate list for one request.
+
+    Args:
+        requested_model: Optional ``provider/model`` preference. It stays first.
+        configured: Configured provider names, in catalog order.
+        health: Local health records. Entries for providers outside ``configured`` are ignored.
+        now_ts: Current timestamp used for cooldown checks.
+        ttl_seconds: Kept for callers. Remembered successes stay eligible after this TTL;
+            cooldown is read from ``cooldown_until``.
+        key_hashes: Current API-key hashes, used to lift auth cooldowns.
+        listed_models: Per-provider ``list_models()`` results from this request.
+            ``None`` as the map, a missing provider, ``None`` as the value, or an empty
+            list means the list failed or had no qualified model, so the single hint is used.
+            A provider already in ``rate_limit``, ``quota``, or ``auth`` cooldown is skipped
+            entirely, including when this map contains models for it.
+
+    Returns:
+        Candidates in attempt order. Each configured provider contributes its latest
+        uncooled success, then one refreshed model when that model differs, otherwise
+        its single hint.
+
+    Raises:
+        KeyError: A configured provider is missing from the catalog when its hint is needed.
+    """
+    del ttl_seconds
     ordered: list[CandidateTarget] = []
     seen: set[tuple[str, str]] = set()
     hashes = key_hashes or {}
@@ -181,16 +311,20 @@ def build_auto_candidates(
         provider_name, model_id = requested_model.split('/', 1)
         push(provider_name, model_id, 'user_requested')
 
-    ranked: list[tuple[int, int, str, str]] = []
-    for provider_rank, provider_name in enumerate(configured):
+    for provider_name in configured:
+        key_hash = hashes.get(provider_name)
+        if provider_cooldown_active(health, provider_name, now_ts, key_hash):
+            continue
+        success = _latest_successful_model(health, provider_name, now_ts, key_hash)
+        if success:
+            push(provider_name, success, 'health_boosted')
+        refreshed = _refreshed_model(provider_name, listed_models)
+        if refreshed:
+            push(provider_name, refreshed, 'provider_default')
+            continue
         hints = get_provider_model_hints(provider_name)
-        for model_id in hints:
-            entry = health.get(f'{provider_name}/{model_id}')
-            score = _health_score(entry, now_ts, ttl_seconds) if isinstance(entry, dict) else 0
-            ranked.append((score, -provider_rank, provider_name, model_id))
-
-    for _, _, provider_name, model_id in sorted(ranked, key=lambda item: (item[0], item[1]), reverse=True):
-        push(provider_name, model_id, 'health_boosted' if isinstance(health.get(f'{provider_name}/{model_id}'), dict) else 'provider_default')
+        if hints:
+            push(provider_name, hints[0], 'provider_default')
 
     return ordered
 

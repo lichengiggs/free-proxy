@@ -32,8 +32,7 @@
 - 文件：`python_scripts/provider_routing.py`
 - 职责：
   - 解析 `auto` / `free-proxy/...`
-  - 产出 `auto` 候选顺序
-  - 基于健康状态重排候选模型
+  - 产出 `auto` 候选顺序：成功记录、同一次请求刷新列表、hint 兜底
 
 ### 3.3 Provider Adapter / Transport
 
@@ -45,7 +44,7 @@
   - 统一 HTTP 传输
   - 处理 OpenAI / Gemini 协议差异
   - 保留 OpenRouter 免费模型过滤、Gemini 文本模型过滤
-  - Groq / NVIDIA / AMD 在 `/models` 失败或返回空列表时回退 `model_hints`
+  - Groq / NVIDIA / AMD 在 `/models` 失败或返回空列表时回退那一个 `model_hints`
 
 ### 3.4 Service
 
@@ -68,7 +67,7 @@
 - 职责：
   - 校验公开模型面，接受 `auto` / `free-proxy/auto` / `free_proxy/auto`，对外模型名归一为 `free-proxy/auto`
   - 统一提取 `requested_model`、`messages`、输出预算
-  - 构建 health + hints + 静态 fallback 候选池
+  - 构建候选池：有成功记录先试记录，同一次请求刷新列表，hint 只做没有记录或列表失败时的兜底
   - 按错误分类执行 fallback；已经把 2xx SSE 交给客户端之后不再换 provider
   - OpenAI 格式上游始终 `stream: true`。客户端要求流式时按到达顺序转发上游 SSE，包含 `data: [DONE]`；客户端不要求流式时，按顺序拼接 `choices[0].delta.content`，正文为空才改用拼接后的 `delta.reasoning_content`，`finish_reason` 取最后一个非空值，再合成 OpenAI JSON
   - 适配器只返回 JSON body 时保留现有 JSON 归一化；客户端要求流式且没有 SSE 迭代器时，仍把该 JSON 一次性包装成 SSE。Gemini 聊天使用 `streamGenerateContent?alt=sse`，再映射成 OpenAI SSE
@@ -84,7 +83,7 @@
 
 ## 4. 当前路由规则
 
-- `free-proxy/auto` / `auto` / `free_proxy/auto`：按健康驱动候选池路由
+- `free-proxy/auto` / `auto` / `free_proxy/auto`：先试最近一次成功的模型，同一次请求刷新列表，hint 只做兜底
 - `coding` / `free-proxy/coding` / `free_proxy/coding`：拒绝并返回 `model_deprecated`
 - `requested_model` 只作为内部路由偏好，不属于公开稳定接口
 - 冷却中的候选不会进入 `build_auto_candidates()`。转发循环在调用上游前再检查一次，同一次请求里刚写下的 provider 冷却会挡住已经生成的后续模型
@@ -101,8 +100,9 @@
 - 健康状态会写入本地 `data/model-health.json`，失败记录可以带 `category`、`scope`、`cooldown_until`，鉴权失败再带 key 哈希。文件不保存 API key 原文
 - 前端选中的模型偏好会写入本地 `data/preferred-model.json`
 - 这三个文件都是运行时状态，不入库
-- provider `/models` 不稳定时，路由仍需保留 `model_hints` 兜底
-- provider 动态列出的候选模型会在当前 provider 静态默认模型失败后再懒加载，不等所有 provider 都失败
+- `free-proxy/auto` 对每个已配置 provider 的顺序是：成功记录、同一次请求刷新列表、hint 兜底
+- 没有可用的成功记录，或 `/models` 失败、筛完没有合格模型时，才使用该 provider 剩下的那一个 `model_hints`
+- 某个 provider 整家处于 `rate_limit`、`quota`、`auth` 冷却时，不为它拉列表，也不插入它的候选
 
 ## 6. 验收命令
 

@@ -44,8 +44,7 @@
   - `response_normalizer.py` 负责统一 OpenAI JSON / SSE 输出。
   - `provider_adapter.py` 只做单次上游调用和原始响应包装，不做 fallback。
 - `requested_model` 只是内部路由偏好输入，不属于公开稳定模型面；对外文档不要把它写成用户必须理解的主接口。
-- `auto` 候选池必须同时考虑：用户指定模型、health、provider hints、静态 fallback；provider `/models` 若不稳定，必须保留 hints 兜底。
-- provider 动态列出的候选模型应在该 provider 静态默认候选失败后再懒加载，并立即插入当前 provider 后续位置，不要等所有 provider 都失败后再尝试。
+- `auto` 候选池的顺序是：用户指定的 `requested_model` 仍排在最前；有成功记录先试记录，同一次请求刷新列表，hint 只做没有记录或列表失败时的兜底。某个 provider 整家处于 `rate_limit`、`quota`、`auth` 冷却时，不为它拉列表，也不插入它的候选。
 
 
 

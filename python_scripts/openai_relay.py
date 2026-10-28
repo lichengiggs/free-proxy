@@ -9,7 +9,7 @@ from .fallback_policy import CooldownPlan, FallbackContext, decide_next_action, 
 from .provider_adapter import retry_after_from_headers
 from .provider_catalog import configured_provider_names, get_provider
 from .provider_errors import ProviderError
-from .provider_routing import CandidateTarget, build_auto_candidates, candidate_in_cooldown
+from .provider_routing import build_auto_candidates, candidate_in_cooldown, provider_cooldown_active
 from .protocol_converter import gemini_json_to_openai_chat, gemini_sse_to_openai_chat, iter_gemini_sse_as_openai_chunks
 from .request_normalizer import ChatRequest, normalize_chat_request
 from .response_normalizer import RelayResponse, normalize_provider_response, sanitize_model_text, synthesize_openai_json_from_sse
@@ -349,25 +349,32 @@ class OpenAIRelay:
         # auth 的 stop 只结束当前 provider。冷却会挡住它剩下的模型。
         return category != 'auth'
 
-    def _append_provider_listed_candidate(self, candidates: list[CandidateTarget], provider: str, insert_at: int) -> list[CandidateTarget]:
-        ordered = list(candidates)
-        seen = {(item.provider, item.model) for item in ordered}
-        adapter = self.adapter_factory(provider)
-        list_models = getattr(adapter, 'list_models', None)
-        if not callable(list_models):
-            return ordered
+    def _fetch_listed_models(self, provider: str) -> list[str] | None:
         try:
+            adapter = self.adapter_factory(provider)
+            list_models = getattr(adapter, 'list_models', None)
+            if not callable(list_models):
+                return None
             models = list_models()
         except Exception:
-            return ordered
-        if not models:
-            return ordered
-        listed_model = models[0]
-        key = (provider, listed_model)
-        if key in seen:
-            return ordered
-        ordered.insert(insert_at, CandidateTarget(provider, listed_model, 'provider_default', insert_at))
-        return [CandidateTarget(item.provider, item.model, item.source, rank) for rank, item in enumerate(ordered)]
+            return None
+        if isinstance(models, str) or not isinstance(models, (list, tuple)):
+            return None
+        return [model for model in models if isinstance(model, str)]
+
+    def _refresh_listed_models(
+        self,
+        configured: list[str],
+        live_health: dict[str, dict[str, object]],
+        now_ts: int,
+        key_hashes: dict[str, str],
+    ) -> dict[str, list[str] | None]:
+        listed: dict[str, list[str] | None] = {}
+        for provider in configured:
+            if provider_cooldown_active(live_health, provider, now_ts, key_hashes.get(provider)):
+                continue
+            listed[provider] = self._fetch_listed_models(provider)
+        return listed
 
     @staticmethod
     def _extract_openai_text(parsed: object) -> str:
@@ -423,10 +430,10 @@ class OpenAIRelay:
             now_ts=now_ts,
             ttl_seconds=self.health_ttl_seconds,
             key_hashes=key_hashes,
+            listed_models=self._refresh_listed_models(configured, live_health, now_ts, key_hashes),
         )
         same_provider_attempts = 0
         current_provider = ''
-        listed_loaded: set[str] = set()
         index = 0
         while index < len(candidates):
             candidate = candidates[index]
@@ -589,7 +596,7 @@ class OpenAIRelay:
                 error_text = str(exc)
             retry_after = self._retry_after_header(adapter_response)
             failure = classify_error(adapter_response.status, error_text)
-            plan = self._remember_attempt(
+            self._remember_attempt(
                 live_health,
                 candidate.provider,
                 candidate.model,
@@ -599,10 +606,6 @@ class OpenAIRelay:
                 now_ts=now_ts,
                 retry_after=retry_after,
             )
-            if plan is None or plan.scope != 'provider':
-                if candidate.provider not in listed_loaded:
-                    listed_loaded.add(candidate.provider)
-                    candidates = self._append_provider_listed_candidate(candidates, candidate.provider, index)
             decision = decide_next_action(
                 FallbackContext(index, same_provider_attempts),
                 RelayAttemptResult(False, candidate.provider, candidate.model, failure.category, adapter_response.status, None, failure.message, retry_after),

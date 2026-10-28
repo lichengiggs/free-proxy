@@ -1,12 +1,16 @@
 from __future__ import annotations
 
 import json
+import tempfile
 import time
 import unittest
+from pathlib import Path
 from unittest.mock import patch
 
 from python_scripts.fallback_policy import QUOTA_COOLDOWN_SECONDS
+from python_scripts.health_store import load_health, upsert_health
 from python_scripts.openai_relay import OpenAIRelay
+from python_scripts.provider_catalog import get_provider
 from python_scripts.provider_errors import ProviderError
 from python_scripts.request_normalizer import ChatRequest
 from python_scripts.token_policy import response_token_budget
@@ -96,8 +100,8 @@ class OpenAIRelayTests(unittest.TestCase):
         request = ChatRequest('free-proxy/auto', None, [{'role': 'user', 'content': 'hi'}], False, None, None, {'model': 'auto', 'messages': [{'role': 'user', 'content': 'hi'}]})
         response = relay.handle_chat(request)
         self.assertEqual(response.status, 200)
-        self.assertEqual(adapter.payloads[0]['model'], 'openrouter/auto:free')
-        self.assertEqual(adapter.payloads[1]['model'], 'qwen/qwen3.6-plus-preview:free')
+        self.assertEqual(adapter.list_calls, ['called'])
+        self.assertEqual([item['model'] for item in adapter.payloads], ['qwen/qwen3.6-plus-preview:free'])
 
     def test_relay_loads_listed_models_lazily_after_provider_failure(self) -> None:
         class LazyAdapter:
@@ -128,7 +132,7 @@ class OpenAIRelayTests(unittest.TestCase):
         request = ChatRequest('free-proxy/auto', None, [{'role': 'user', 'content': 'hi'}], False, None, None, {'model': 'auto', 'messages': [{'role': 'user', 'content': 'hi'}]})
         response = relay.handle_chat(request)
         self.assertEqual(response.status, 200)
-        self.assertEqual(tracker['lists'], ['openrouter'])
+        self.assertEqual(tracker['lists'], ['openrouter', 'groq'])
         self.assertEqual(
             tracker['payloads'][:2],
             ['openrouter:openrouter/auto:free', 'openrouter:qwen/qwen3.6-plus-preview:free'],
@@ -444,6 +448,9 @@ class OpenAIRelayTests(unittest.TestCase):
             def __init__(self) -> None:
                 self.calls = 0
 
+            def list_models(self) -> list[str]:
+                return ['openai/gpt-oss-20b']
+
             def forward_chat(self, payload: dict[str, object]):
                 self.calls += 1
                 if self.calls == 1:
@@ -453,7 +460,7 @@ class OpenAIRelayTests(unittest.TestCase):
         adapter = HealthAdapter()
         relay = OpenAIRelay(
             adapter_factory=lambda provider: adapter,
-            health_loader=lambda: {},
+            health_loader=lambda: {'groq/llama-3.1-8b-instant': {'ok': True, 'checked_at': int(time.time())}},
             health_updater=lambda provider, model, ok, reason=None, **_fields: events.append((provider, model, ok, reason)),
             health_ttl_seconds=60,
             configured_providers_loader=lambda: ['groq'],
@@ -465,7 +472,7 @@ class OpenAIRelayTests(unittest.TestCase):
         self.assertEqual(response.status, 200)
         self.assertGreaterEqual(len(events), 2)
         self.assertEqual(events[0][:3], ('groq', 'llama-3.1-8b-instant', False))
-        self.assertEqual(events[-1][:3], ('groq', 'llama-3.3-70b-versatile', True))
+        self.assertEqual(events[-1][:3], ('groq', 'openai/gpt-oss-20b', True))
 
     def test_relay_attempts_candidates_in_priority_order(self) -> None:
         calls: list[tuple[str, str]] = []
@@ -628,8 +635,7 @@ class OpenAIRelayTests(unittest.TestCase):
         response = relay.handle_chat(request)
 
         self.assertEqual(response.status, 200)
-        self.assertEqual(calls[:2], ['gemini', 'gemini'])
-        self.assertIn('groq', calls)
+        self.assertEqual(calls, ['gemini', 'groq'])
         self.assertIn(b'ok-fallback', response.body or b'')
 
     def test_relay_prefers_health_boosted_candidate_over_configured_order(self) -> None:
@@ -657,7 +663,8 @@ class OpenAIRelayTests(unittest.TestCase):
         response = relay.handle_chat(request)
 
         self.assertEqual(response.status, 200)
-        self.assertEqual(calls[0], ('groq', 'llama-3.1-8b-instant'))
+        self.assertEqual(calls[0], ('openrouter', 'openrouter/auto:free'))
+        self.assertIn(('groq', 'llama-3.1-8b-instant'), calls)
         self.assertIsNone(response.body)
         self.assertIsNotNone(response.stream_chunks)
         chunks = list(response.stream_chunks or [])
@@ -1035,6 +1042,210 @@ class OpenAIRelayTests(unittest.TestCase):
         self.assertIsNone(json_response.stream_chunks)
         self.assertIn(b'json-body', json_response.body or b'')
 
+    def test_auto_chat_tries_remembered_model_then_one_refreshed_model(self) -> None:
+        calls: list[str] = []
+        lists: list[str] = []
+
+        class Adapter:
+            def list_models(self) -> list[str]:
+                lists.append('groq')
+                return ['llama-3.3-70b-versatile', 'qwen/qwen3-32b']
+
+            def forward_chat(self, payload: dict[str, object]):
+                model = str(payload.get('model', ''))
+                calls.append(model)
+                if model == 'openai/gpt-oss-20b':
+                    return _error_response(500, 'server error')
+                return _ok_response('refreshed')
+
+        relay = OpenAIRelay(
+            adapter_factory=lambda provider: Adapter(),
+            health_loader=lambda: {'groq/openai/gpt-oss-20b': {'ok': True, 'checked_at': int(time.time())}},
+            health_ttl_seconds=600,
+            configured_providers_loader=lambda: ['groq'],
+        )
+        response = relay.handle_chat(_chat_request())
+        self.assertEqual(response.status, 200)
+        self.assertEqual(lists, ['groq'])
+        self.assertEqual(calls, ['openai/gpt-oss-20b', 'qwen/qwen3-32b'])
+        self.assertNotIn('llama-3.3-70b-versatile', calls)
+        self.assertNotIn('llama-3.1-8b-instant', calls)
+
+    def test_auto_chat_uses_only_the_provider_hint_when_model_list_fails(self) -> None:
+        calls: list[str] = []
+        lists: list[str] = []
+
+        class Adapter:
+            def list_models(self) -> list[str]:
+                lists.append('groq')
+                raise ProviderError('获取模型失败')
+
+            def forward_chat(self, payload: dict[str, object]):
+                calls.append(str(payload.get('model', '')))
+                return _ok_response('hint')
+
+        relay = OpenAIRelay(
+            adapter_factory=lambda provider: Adapter(),
+            health_loader=lambda: {},
+            health_ttl_seconds=600,
+            configured_providers_loader=lambda: ['groq'],
+        )
+        response = relay.handle_chat(_chat_request())
+        self.assertEqual(response.status, 200)
+        self.assertEqual(lists, ['groq'])
+        self.assertEqual(calls, ['llama-3.1-8b-instant'])
+
+    def test_auto_chat_forgets_remembered_model_after_model_not_found(self) -> None:
+        calls: list[str] = []
+        list_calls: list[int] = []
+        clock = _Clock(1_700_000_000)
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / 'model-health.json'
+            upsert_health('groq', 'openai/gpt-oss-20b', True, path=path, now_ts=clock.now - 10)
+
+            def updater(provider: str, model: str, ok: bool, reason: str | None = None, **fields: object) -> None:
+                category = fields.get('category')
+                scope = fields.get('scope')
+                cooldown_until = fields.get('cooldown_until')
+                key_hash = fields.get('key_hash')
+                upsert_health(
+                    provider,
+                    model,
+                    ok,
+                    reason,
+                    path=path,
+                    now_ts=clock.now,
+                    category=category if isinstance(category, str) else None,
+                    cooldown_until=cooldown_until if isinstance(cooldown_until, int) and not isinstance(cooldown_until, bool) else None,
+                    scope=scope if scope in {'model', 'provider'} else None,
+                    key_hash=key_hash if isinstance(key_hash, str) else None,
+                )
+
+            class Adapter:
+                def list_models(self) -> list[str]:
+                    list_calls.append(clock.now)
+                    if len(list_calls) == 1:
+                        return ['qwen/qwen3-32b']
+                    return []
+
+                def forward_chat(self, payload: dict[str, object]):
+                    model = str(payload.get('model', ''))
+                    calls.append(model)
+                    if model == 'openai/gpt-oss-20b':
+                        return _error_response(404, 'model not found')
+                    if model == 'qwen/qwen3-32b':
+                        return _error_response(500, 'server error')
+                    return _ok_response('hint')
+
+            relay = OpenAIRelay(
+                adapter_factory=lambda provider: Adapter(),
+                health_loader=lambda: load_health(path),
+                health_updater=updater,
+                health_ttl_seconds=600,
+                configured_providers_loader=lambda: ['groq'],
+            )
+            with patch('python_scripts.openai_relay.time.time', clock.time):
+                first = relay.handle_chat(_chat_request())
+                self.assertEqual(calls, ['openai/gpt-oss-20b', 'qwen/qwen3-32b'])
+                self.assertEqual(first.status, 502)
+                saved = load_health(path)
+                self.assertIs(saved['groq/openai/gpt-oss-20b']['ok'], False)
+                self.assertIs(saved['groq/qwen/qwen3-32b']['ok'], False)
+                calls.clear()
+                clock.now += 601
+                second = relay.handle_chat(_chat_request())
+                self.assertEqual(second.status, 200)
+                self.assertEqual(calls, ['llama-3.1-8b-instant'])
+                self.assertNotIn('openai/gpt-oss-20b', calls)
+
+    def test_successful_auto_chat_does_not_change_provider_catalog_hints(self) -> None:
+        catalog = Path(__file__).resolve().parents[1] / 'provider_catalog.py'
+        before = catalog.read_bytes()
+
+        class Adapter:
+            def list_models(self) -> list[str]:
+                return ['openrouter/free', 'meta/llama:free']
+
+            def forward_chat(self, payload: dict[str, object]):
+                del payload
+                return _ok_response('kept-hints')
+
+        relay = OpenAIRelay(
+            adapter_factory=lambda provider: Adapter(),
+            health_loader=lambda: {},
+            health_updater=lambda provider, model, ok, reason=None, **_fields: None,
+            health_ttl_seconds=600,
+            configured_providers_loader=lambda: ['openrouter'],
+        )
+        response = relay.handle_chat(_chat_request())
+        self.assertEqual(response.status, 200)
+        self.assertEqual(catalog.read_bytes(), before)
+        self.assertEqual(get_provider('openrouter').model_hints, ('openrouter/auto:free',))
+        self.assertNotIn(b'openrouter/free', before)
+
+    def test_openrouter_refresh_chat_prefers_openrouter_free(self) -> None:
+        calls: list[str] = []
+
+        class Adapter:
+            def list_models(self) -> list[str]:
+                return ['meta/llama:free', 'openrouter/free', 'qwen/qwen3:free']
+
+            def forward_chat(self, payload: dict[str, object]):
+                calls.append(str(payload.get('model', '')))
+                return _ok_response('free')
+
+        relay = OpenAIRelay(
+            adapter_factory=lambda provider: Adapter(),
+            health_loader=lambda: {},
+            health_ttl_seconds=600,
+            configured_providers_loader=lambda: ['openrouter'],
+        )
+        response = relay.handle_chat(_chat_request())
+        self.assertEqual(response.status, 200)
+        self.assertEqual(calls, ['openrouter/free'])
+
+    def test_gemini_refresh_chat_skips_pro_and_argon_models(self) -> None:
+        calls: list[str] = []
+
+        class Adapter:
+            def list_models(self) -> list[str]:
+                return ['gemini-2.5-pro', 'gemini-3-argon', 'gemini-2.0-flash', 'gemini-2.5-flash-lite']
+
+            def forward_chat(self, payload: dict[str, object]):
+                calls.append(str(payload.get('model', '')))
+                return _ok_response('gemini')
+
+        relay = OpenAIRelay(
+            adapter_factory=lambda provider: Adapter(),
+            health_loader=lambda: {},
+            health_ttl_seconds=600,
+            configured_providers_loader=lambda: ['gemini'],
+        )
+        response = relay.handle_chat(_chat_request())
+        self.assertEqual(response.status, 200)
+        self.assertEqual(calls, ['gemini-2.5-flash-lite'])
+
+    def test_groq_refresh_chat_skips_models_outside_gpt_oss_and_qwen(self) -> None:
+        calls: list[str] = []
+
+        class Adapter:
+            def list_models(self) -> list[str]:
+                return ['llama-3.3-70b-versatile', 'mixtral-8x7b-32768']
+
+            def forward_chat(self, payload: dict[str, object]):
+                calls.append(str(payload.get('model', '')))
+                return _ok_response('hint')
+
+        relay = OpenAIRelay(
+            adapter_factory=lambda provider: Adapter(),
+            health_loader=lambda: {},
+            health_ttl_seconds=600,
+            configured_providers_loader=lambda: ['groq'],
+        )
+        response = relay.handle_chat(_chat_request())
+        self.assertEqual(response.status, 200)
+        self.assertEqual(calls, ['llama-3.1-8b-instant'])
+
 
 class _Clock:
     def __init__(self, now: int) -> None:
@@ -1142,7 +1353,7 @@ class CooldownRelayTests(unittest.TestCase):
                     ('gemini', 'gemini-3.1-flash-lite-preview'),
                 ],
             )
-            self.assertEqual(lists, [])
+            self.assertEqual(lists, ['groq', 'gemini'])
             slept.assert_not_called()
 
             relay.handle_chat(_chat_request())
@@ -1156,7 +1367,7 @@ class CooldownRelayTests(unittest.TestCase):
             clock.now += 1
             relay.handle_chat(_chat_request())
             self.assertEqual([item for item in calls if item[0] == 'groq'], [('groq', 'llama-3.1-8b-instant'), ('groq', 'llama-3.1-8b-instant')])
-            self.assertNotIn('groq', lists)
+            self.assertEqual(lists.count('groq'), 2)
 
     def test_retry_after_controls_rate_limit_cooldown(self) -> None:
         calls: list[tuple[str, str]] = []
@@ -1196,7 +1407,7 @@ class CooldownRelayTests(unittest.TestCase):
             clock.now += 30
             relay.handle_chat(_chat_request())
             self.assertEqual(groq_calls(), [('groq', 'llama-3.1-8b-instant'), ('groq', 'llama-3.1-8b-instant')])
-            self.assertNotIn('groq', lists)
+            self.assertEqual(lists.count('groq'), 2)
 
     def test_quota_cooldown_lasts_six_hours(self) -> None:
         calls: list[str] = []
@@ -1234,7 +1445,7 @@ class CooldownRelayTests(unittest.TestCase):
             clock.now += 1
             relay.handle_chat(_chat_request())
             self.assertEqual(calls.count('groq'), 2)
-            self.assertNotIn('groq', lists)
+            self.assertEqual(lists.count('groq'), 2)
 
     def test_auth_cooldown_follows_key_hash(self) -> None:
         calls: list[str] = []
@@ -1271,6 +1482,9 @@ class CooldownRelayTests(unittest.TestCase):
 
         def factory(provider: str):
             class Adapter:
+                def list_models(self) -> list[str]:
+                    return ['openai/gpt-oss-20b']
+
                 def forward_chat(self, payload: dict[str, object]):
                     model = str(payload.get('model', ''))
                     calls.append((provider, model))
@@ -1280,14 +1494,18 @@ class CooldownRelayTests(unittest.TestCase):
 
             return Adapter()
 
-        relay, _memory, _hashes = self._relay(factory, ['groq'])
+        relay, _memory, _hashes = self._relay(
+            factory,
+            ['groq'],
+            health={'groq/llama-3.1-8b-instant': {'ok': True, 'checked_at': 1_700_000_000}},
+        )
         response = relay.handle_chat(_chat_request())
         self.assertEqual(response.status, 200)
         self.assertEqual(
             calls[:2],
             [
                 ('groq', 'llama-3.1-8b-instant'),
-                ('groq', 'llama-3.3-70b-versatile'),
+                ('groq', 'openai/gpt-oss-20b'),
             ],
         )
 
