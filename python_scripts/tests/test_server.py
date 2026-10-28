@@ -139,20 +139,14 @@ class FakeService:
 class ServerApiTests(unittest.TestCase):
     def setUp(self) -> None:
         self._old_service = _service
-        self._old_openclaw_test_dir = os.environ.get('OPENCLAW_TEST_DIR')
         self._old_opencode_test_dir = os.environ.get('OPENCODE_TEST_DIR')
         self.tmp = tempfile.TemporaryDirectory()
-        os.environ['OPENCLAW_TEST_DIR'] = self.tmp.name
         import python_scripts.server_fastapi as sf
         sf._service = FakeService()
 
     def tearDown(self) -> None:
         import python_scripts.server_fastapi as sf
         sf._service = self._old_service
-        if self._old_openclaw_test_dir is None:
-            os.environ.pop('OPENCLAW_TEST_DIR', None)
-        else:
-            os.environ['OPENCLAW_TEST_DIR'] = self._old_openclaw_test_dir
         if self._old_opencode_test_dir is None:
             os.environ.pop('OPENCODE_TEST_DIR', None)
         else:
@@ -166,6 +160,18 @@ class ServerApiTests(unittest.TestCase):
         self.assertIn('text/html', resp.headers.get('content-type', ''))
         self.assertIn('free-proxy 控制台', resp.text)
         self.assertIn('Ofox', resp.text)
+        self.assertIn('4. 接入说明', resp.text)
+        self.assertIn('from openai import OpenAI', resp.text)
+        self.assertIn('base_url="http://127.0.0.1:8765/v1"', resp.text)
+        self.assertIn('Opencode 验证方式', resp.text)
+        self.assertIn('opencode run -m free-proxy/auto', resp.text)
+        self.assertNotIn('OpenClaw 配置', resp.text)
+        self.assertNotIn('设为 OpenClaw 默认模型', resp.text)
+        self.assertNotIn('OpenClaw 关键配置', resp.text)
+        self.assertNotIn('/api/detect-openclaw', resp.text)
+        self.assertNotIn('/api/configure-openclaw', resp.text)
+        self.assertNotIn('/api/backups', resp.text)
+        self.assertNotIn('/api/restore-backup', resp.text)
 
     def test_serve_parser_accepts_debug_flag(self) -> None:
         args = build_parser().parse_args(['serve', '--debug'])
@@ -462,11 +468,33 @@ class ServerApiTests(unittest.TestCase):
         self.assertEqual(body['actual_model'], 'm1')
         self.assertEqual(body['content'], 'echo:hello')
 
-    def test_configure_openclaw_rejects_invalid_mode(self) -> None:
+    def test_detect_openclaw_returns_404(self) -> None:
         client = TestClient(app)
-        resp = client.post('/api/configure-openclaw', json={'mode': 'invalid'})
-        self.assertEqual(resp.status_code, 400)
-        self.assertFalse(bool(resp.json()['success']))
+        resp = client.get('/api/detect-openclaw')
+        unknown = client.get('/api/not-a-registered-route')
+        self.assertEqual(resp.status_code, 404)
+        self.assertEqual(resp.json(), unknown.json())
+
+    def test_configure_openclaw_returns_404(self) -> None:
+        client = TestClient(app)
+        resp = client.post('/api/configure-openclaw', json={'mode': 'default'})
+        unknown = client.post('/api/not-a-registered-route', json={'mode': 'default'})
+        self.assertEqual(resp.status_code, 404)
+        self.assertEqual(resp.json(), unknown.json())
+
+    def test_openclaw_backup_list_returns_404(self) -> None:
+        client = TestClient(app)
+        resp = client.get('/api/backups')
+        unknown = client.get('/api/not-a-registered-route')
+        self.assertEqual(resp.status_code, 404)
+        self.assertEqual(resp.json(), unknown.json())
+
+    def test_restore_openclaw_backup_returns_404(self) -> None:
+        client = TestClient(app)
+        resp = client.post('/api/restore-backup', json={'backup': 'openclaw.bak1'})
+        unknown = client.post('/api/not-a-registered-route', json={'backup': 'openclaw.bak1'})
+        self.assertEqual(resp.status_code, 404)
+        self.assertEqual(resp.json(), unknown.json())
 
     def test_configure_opencode_writes_free_proxy_provider(self) -> None:
         os.environ['OPENCODE_TEST_DIR'] = self.tmp.name
