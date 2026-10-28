@@ -659,22 +659,10 @@
                 </div>
             </section>
 
-            <section class="card" id="openClawSection">
-                <div class="card-head">
-                    <div>
-                        <h2>5. OpenClaw 配置</h2>
-                        <div class="subtle">和 TS 版一致：支持检测、设为默认模型、加入备用链、查看与恢复备份。</div>
-                    </div>
-                </div>
-                <div id="openClawStatus" class="result-box status-info">正在检测 OpenClaw 配置...</div>
-                <div id="openClawActions" class="toolbar" style="margin-top: 12px;"></div>
-                <div id="backupSection" style="margin-top: 12px;"></div>
-            </section>
-
             <section class="card">
                 <div class="card-head">
                     <div>
-                        <h2>6. 接入说明</h2>
+                        <h2>4. 接入说明</h2>
                         <div class="subtle">以下示例与当前真实实现一致，只保留稳定别名 `free-proxy/auto`。</div>
                     </div>
                 </div>
@@ -692,13 +680,6 @@ resp = client.chat.completions.create(
     messages=[{"role": "user", "content": "Reply with exactly OK"}],
 )
 print(resp.choices[0].message.content)</pre>
-                </div>
-                <div class="guide-block">
-                    <div class="guide-title">OpenClaw 关键配置</div>
-                    <pre class="guide-code">provider id: free-proxy
-baseUrl: http://localhost:8765/v1
-models: auto
-默认模型: free-proxy/auto</pre>
                 </div>
                 <div class="guide-block">
                     <div class="guide-title">Opencode 验证方式</div>
@@ -745,9 +726,6 @@ opencode run -m free-proxy/auto "Reply with exactly OK"</pre>
         const chatModel = document.getElementById('chatModel');
         const chatPrompt = document.getElementById('chatPrompt');
         const modelSuggestions = document.getElementById('modelSuggestions');
-        const openClawStatus = document.getElementById('openClawStatus');
-        const openClawActions = document.getElementById('openClawActions');
-        const backupSection = document.getElementById('backupSection');
 
         function showToast(message, type = 'success') {
             toast.textContent = message;
@@ -1358,122 +1336,6 @@ opencode run -m free-proxy/auto "Reply with exactly OK"</pre>
             }
         }
 
-        async function checkOpenClawStatus() {
-            try {
-                const data = await requestJson('/api/detect-openclaw');
-                if (data.exists && data.isValid) {
-                    openClawStatus.className = 'result-box status-success';
-                    openClawStatus.textContent = `已检测到 OpenClaw 配置\n路径: ${data.path}`;
-                    openClawActions.innerHTML = `
-                        <button class="btn btn-primary" data-oc-action="configure" data-mode="default">设为 OpenClaw 默认模型</button>
-                        <button class="btn btn-secondary" data-oc-action="configure" data-mode="fallback">加入 OpenClaw 备用模型</button>
-                    `;
-                } else if (data.exists && !data.isValid) {
-                    openClawStatus.className = 'result-box status-error';
-                    openClawStatus.textContent = `检测到 OpenClaw 配置文件，但 JSON 格式不正确\n路径: ${data.path}`;
-                    openClawActions.innerHTML = '';
-                } else {
-                    openClawStatus.className = 'result-box status-info';
-                    openClawStatus.textContent = '未检测到 OpenClaw 配置文件。';
-                    openClawActions.innerHTML = `
-                        <button class="btn btn-primary" data-oc-action="configure" data-mode="default">创建并设为默认模型</button>
-                        <button class="btn btn-secondary" data-oc-action="configure" data-mode="fallback">创建并加入备用模型</button>
-                    `;
-                }
-                await loadBackups();
-            } catch (error) {
-                openClawStatus.className = 'result-box status-error';
-                openClawStatus.textContent = `检测 OpenClaw 失败: ${error.message || '未知错误'}`;
-                openClawActions.innerHTML = '';
-            }
-        }
-
-        async function configureOpenClaw(mode, button) {
-            button.disabled = true;
-            const label = button.textContent;
-            button.textContent = '配置中...';
-            try {
-                const data = await requestJson('/api/configure-openclaw', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ mode }),
-                });
-                showToast(data.message || 'OpenClaw 配置成功');
-                setDiagnostics('status-success', [
-                    'OpenClaw 配置成功',
-                    mode === 'default' ? '模式: 默认模型' : '模式: 备用模型',
-                    data.backup ? `备份: ${data.backup}` : '备份: 首次创建，无旧配置可备份',
-                ]);
-                await checkOpenClawStatus();
-            } catch (error) {
-                const payload = error.payload || {};
-                showToast(payload.error || error.message || '配置失败', 'error');
-                setDiagnostics('status-error', [
-                    'OpenClaw 配置失败',
-                    `错误: ${payload.error || error.message || '未知错误'}`,
-                ]);
-            } finally {
-                button.disabled = false;
-                button.textContent = label;
-            }
-        }
-
-        async function loadBackups() {
-            try {
-                const data = await requestJson('/api/backups');
-                const backups = Array.isArray(data.backups) ? data.backups : [];
-                if (!backups.length) {
-                    backupSection.innerHTML = '<div class="panel-note">暂无 OpenClaw 备份文件。</div>';
-                    return;
-                }
-
-                backupSection.innerHTML = `
-                    <div class="panel-note" style="margin-bottom: 8px;">最近备份（最多展示 5 条）</div>
-                    ${backups.slice(0, 5).map((name) => `
-                        <div class="model-item" style="padding: 10px 12px; margin-bottom: 8px;">
-                            <div class="model-meta">
-                                <div class="model-name mono">${escapeHtml(name)}</div>
-                            </div>
-                            <div class="model-actions">
-                                <button class="btn btn-ghost" data-oc-action="restore" data-backup="${escapeHtml(name)}">恢复</button>
-                            </div>
-                        </div>
-                    `).join('')}
-                `;
-            } catch (error) {
-                backupSection.innerHTML = `<div class="result-box status-error">加载备份失败: ${escapeHtml(error.message || '未知错误')}</div>`;
-            }
-        }
-
-        async function restoreBackup(backupName, button) {
-            button.disabled = true;
-            const label = button.textContent;
-            button.textContent = '恢复中...';
-            try {
-                await requestJson('/api/restore-backup', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ backup: backupName }),
-                });
-                showToast(`已恢复备份: ${backupName}`);
-                setDiagnostics('status-success', [
-                    'OpenClaw 备份恢复成功',
-                    `备份文件: ${backupName}`,
-                ]);
-                await checkOpenClawStatus();
-            } catch (error) {
-                const payload = error.payload || {};
-                showToast(payload.error || error.message || '恢复失败', 'error');
-                setDiagnostics('status-error', [
-                    'OpenClaw 备份恢复失败',
-                    `错误: ${payload.error || error.message || '未知错误'}`,
-                ]);
-            } finally {
-                button.disabled = false;
-                button.textContent = label;
-            }
-        }
-
         providerGrid.addEventListener('click', async (event) => {
             const button = event.target.closest('button[data-action]');
             if (!button) {
@@ -1571,34 +1433,10 @@ opencode run -m free-proxy/auto "Reply with exactly OK"</pre>
             showToast('状态已刷新', 'info');
         });
 
-        openClawActions.addEventListener('click', async (event) => {
-            const button = event.target.closest('button[data-oc-action]');
-            if (!button) {
-                return;
-            }
-            const action = button.dataset.ocAction;
-            if (action === 'configure') {
-                await configureOpenClaw(button.dataset.mode, button);
-            }
-        });
-
-        backupSection.addEventListener('click', async (event) => {
-            const button = event.target.closest('button[data-oc-action="restore"]');
-            if (!button) {
-                return;
-            }
-            const backup = button.dataset.backup || '';
-            if (!backup) {
-                return;
-            }
-            await restoreBackup(backup, button);
-        });
-
         async function bootstrap(forceModels = false) {
             await loadStatuses();
             await loadPreferredModel();
             await ensureVisibleModels(forceModels);
-            await checkOpenClawStatus();
             setDiagnostics('status-info', [
                 '动作: 页面初始化',
                 `结果: 已加载 ${configuredProviders().length} 个已配置 provider`,

@@ -5,6 +5,7 @@
 - `/v1/models` now returns only `free-proxy/auto`
 - console and catalog no longer offer GitHub Models
 - console and catalog no longer offer Ofox
+- console no longer provides OpenClaw configuration
 
 ### Added
 - `requested_model` support for internal routing preference
@@ -15,7 +16,7 @@
 - skip cooled providers and models on `free-proxy/auto` instead of calling upstreams that already failed
 - route `/v1/chat/completions` through a unified relay pipeline instead of scattered service/server logic
 - lazily load provider-listed fallback models immediately after the failed static default for the same provider
-- migrate OpenCode and OpenClaw config output to `auto` only while cleaning legacy `coding` entries
+- migrate OpenCode config output to `auto` only while cleaning legacy `coding` entries
 
 ### Fixed
 - reject legacy `coding` runtime requests with explicit `model_deprecated` instead of silently falling back

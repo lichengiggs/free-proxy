@@ -7,7 +7,7 @@ A local OpenAI-compatible entrypoint that combines multiple free LLM providers. 
 This project is best for:
 
 1. People who want to try multiple free models at low cost
-2. People who want one local entrypoint for OpenAI SDK / OpenClaw / Opencode
+2. People who want one local entrypoint for OpenAI SDK / Opencode
 3. People who do not want to maintain separate provider configs by hand
 
 ## What you get
@@ -139,7 +139,7 @@ NO_PROXY=127.0.0.1,localhost HTTP_PROXY= HTTPS_PROXY= ALL_PROXY= http_proxy= htt
 opencode run --print-logs --format json -m free-proxy/auto "Reply with exactly OK"
 ```
 
-## Connect OpenAI SDK / OpenClaw / Opencode
+## Connect OpenAI SDK / Opencode
 
 ### OpenAI / Python SDK
 
@@ -157,15 +157,6 @@ resp = client.chat.completions.create(
 )
 print(resp.choices[0].message.content)
 ```
-
-### OpenClaw
-
-The OpenClaw action on the page writes `~/.openclaw/openclaw.json`:
-
-- provider id: `free-proxy`
-- baseUrl: `http://localhost:8765/v1`
-- models: `auto`
-- default model: `free-proxy/auto`
 
 ### Opencode
 

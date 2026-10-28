@@ -7,7 +7,7 @@
 这份项目最适合这三类人：
 
 1. 想低成本体验多家免费模型的人
-2. 想给 OpenAI SDK / OpenClaw / Opencode 提供统一本地入口的人
+2. 想给 OpenAI SDK / Opencode 提供统一本地入口的人
 3. 不想手动维护多套 provider 配置的人
 
 ## 你会得到什么
@@ -139,7 +139,7 @@ NO_PROXY=127.0.0.1,localhost HTTP_PROXY= HTTPS_PROXY= ALL_PROXY= http_proxy= htt
 opencode run --print-logs --format json -m free-proxy/auto "Reply with exactly OK"
 ```
 
-## 接入 OpenAI SDK / OpenClaw / Opencode
+## 接入 OpenAI SDK / Opencode
 
 ### OpenAI / Python SDK
 
@@ -157,15 +157,6 @@ resp = client.chat.completions.create(
 )
 print(resp.choices[0].message.content)
 ```
-
-### OpenClaw
-
-页面上的 OpenClaw 配置写入 `~/.openclaw/openclaw.json`：
-
-- provider id：`free-proxy`
-- baseUrl：`http://localhost:8765/v1`
-- models：`auto`
-- 默认模型：`free-proxy/auto`
 
 ### Opencode
 
