@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import unittest
+from pathlib import Path
 
 from python_scripts.provider_catalog import PROVIDERS, configured_provider_names, get_provider, list_providers
 
@@ -41,9 +42,15 @@ class ProviderCatalogTests(unittest.TestCase):
         self.assertEqual(names, [item.name for item in PROVIDERS])
 
     def test_configured_provider_names_reads_env_from_catalog(self) -> None:
-        names = configured_provider_names({'GEMINI_API_KEY': 'y', 'OFOX_API_KEY': 'z', 'LONGCAT_API_KEY': 'x'})
+        names = configured_provider_names({
+            'GEMINI_API_KEY': 'y',
+            'OFOX_API_KEY': 'z',
+            'LONGCAT_API_KEY': 'x',
+            'GITHUB_MODELS_API_KEY': 'g',
+        })
         self.assertEqual(names, ['ofox', 'gemini'])
         self.assertNotIn('longcat', names)
+        self.assertNotIn('github', names)
 
     def test_longcat_api_key_does_not_configure_any_provider(self) -> None:
         names = configured_provider_names({'LONGCAT_API_KEY': 'x'})
@@ -54,6 +61,23 @@ class ProviderCatalogTests(unittest.TestCase):
             get_provider('longcat')
         self.assertTrue(all(provider.name != 'longcat' for provider in PROVIDERS))
         self.assertTrue(all('api.longcat.chat' not in provider.base_url for provider in PROVIDERS))
+
+    def test_github_models_key_does_not_configure_any_provider(self) -> None:
+        names = configured_provider_names({'GITHUB_MODELS_API_KEY': 'x'})
+        self.assertEqual(names, [])
+
+    def test_get_provider_treats_github_as_unknown(self) -> None:
+        with self.assertRaises(KeyError):
+            get_provider('github')
+        self.assertTrue(all(provider.name != 'github' for provider in PROVIDERS))
+        self.assertTrue(all('models.github.ai' not in provider.base_url for provider in PROVIDERS))
+        self.assertTrue(all(provider.api_key_env != 'GITHUB_MODELS_API_KEY' for provider in PROVIDERS))
+
+    def test_console_no_longer_shows_github_models_card(self) -> None:
+        html = Path(__file__).resolve().parents[1].joinpath('web', 'index.html').read_text(encoding='utf-8')
+        self.assertNotIn('GitHub Models', html)
+        self.assertNotIn('GITHUB_MODELS_API_KEY', html)
+        self.assertNotIn("id: 'github'", html)
 
     def test_all_providers_have_required_fields(self) -> None:
         for p in PROVIDERS:

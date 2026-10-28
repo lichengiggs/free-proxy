@@ -52,14 +52,6 @@ PROVIDERS: tuple[ProviderMeta, ...] = (
         model_hints=('gemini-3.1-flash-lite-preview', 'gemini-2.0-flash'),
     ),
     ProviderMeta(
-        'github',
-        'https://models.github.ai/inference',
-        'GITHUB_MODELS_API_KEY',
-        'openai',
-        model_hints=('gpt-4o', 'gpt-4o-mini', 'gpt-4.1-mini', 'DeepSeek-V3-0324'),
-        required_query=(('api-version', '2024-12-01-preview'),),
-    ),
-    ProviderMeta(
         'mistral',
         'https://api.mistral.ai/v1',
         'MISTRAL_API_KEY',

@@ -13,7 +13,7 @@ from .response_normalizer import sanitize_model_text
 from .request_limiter import RequestLimiterGate
 
 JsonObject = dict[str, object]
-_HINT_FALLBACK_PROVIDERS = frozenset({'github', 'groq', 'nvidia', 'ofox', 'amd'})
+_HINT_FALLBACK_PROVIDERS = frozenset({'groq', 'nvidia', 'ofox', 'amd'})
 _AMD_NON_CHAT_MODEL_IDS = frozenset({'MinerU2.5-Pro', 'OmniVoice', 'Clef', 'd3', 'd3-flash'})
 
 
@@ -73,12 +73,6 @@ class ProviderAdapter:
             return {
                 'Content-Type': 'application/json',
                 'x-goog-api-key': self.api_key,
-            }
-        if self.provider.name == 'github':
-            return {
-                'Content-Type': 'application/json',
-                'Authorization': f'Bearer {self.api_key}',
-                'X-GitHub-Api-Version': '2024-12-01-preview',
             }
         return {
             'Content-Type': 'application/json',

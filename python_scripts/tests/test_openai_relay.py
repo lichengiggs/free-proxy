@@ -485,7 +485,7 @@ class OpenAIRelayTests(unittest.TestCase):
             adapter_factory=lambda provider: OrderedAdapter(provider),
             health_loader=lambda: {},
             health_ttl_seconds=60,
-            configured_providers_loader=lambda: ['groq', 'gemini', 'github'],
+            configured_providers_loader=lambda: ['groq', 'gemini', 'mistral'],
         )
         request = ChatRequest('free-proxy/auto', None, [{'role': 'user', 'content': 'hi'}], False, None, None, {'model': 'auto', 'messages': [{'role': 'user', 'content': 'hi'}]})
         response = relay.handle_chat(request)
@@ -614,14 +614,14 @@ class OpenAIRelayTests(unittest.TestCase):
         class SuccessAdapter:
             def forward_chat(self, payload: dict[str, object]):
                 del payload
-                calls.append('github')
+                calls.append('groq')
                 return type('AdapterResponse', (), {'status': 200, 'headers': {'Content-Type': 'application/json; charset=utf-8'}, 'body': b'{"choices":[{"message":{"content":"ok-fallback"}}]}', 'stream': None, 'content_type': 'application/json; charset=utf-8'})()
 
         relay = OpenAIRelay(
             adapter_factory=lambda provider: TimeoutAdapter() if provider == 'gemini' else SuccessAdapter(),
             health_loader=lambda: {},
             health_ttl_seconds=60,
-            configured_providers_loader=lambda: ['gemini', 'github'],
+            configured_providers_loader=lambda: ['gemini', 'groq'],
         )
         request = ChatRequest('free-proxy/auto', None, [{'role': 'user', 'content': 'hi'}], False, None, None, {'model': 'auto', 'messages': [{'role': 'user', 'content': 'hi'}]})
 
@@ -629,7 +629,7 @@ class OpenAIRelayTests(unittest.TestCase):
 
         self.assertEqual(response.status, 200)
         self.assertEqual(calls[:2], ['gemini', 'gemini'])
-        self.assertIn('github', calls)
+        self.assertIn('groq', calls)
         self.assertIn(b'ok-fallback', response.body or b'')
 
     def test_relay_prefers_health_boosted_candidate_over_configured_order(self) -> None:
@@ -650,7 +650,7 @@ class OpenAIRelayTests(unittest.TestCase):
             adapter_factory=lambda provider: OrderedAdapter(provider),
             health_loader=lambda: {'groq/llama-3.1-8b-instant': {'ok': True, 'checked_at': int(time.time()), 'success_streak': 4, 'failure_streak': 0}},
             health_ttl_seconds=60,
-            configured_providers_loader=lambda: ['openrouter', 'groq', 'gemini', 'github'],
+            configured_providers_loader=lambda: ['openrouter', 'groq', 'gemini', 'mistral'],
         )
         request = ChatRequest('free-proxy/auto', None, [{'role': 'user', 'content': 'hi'}], True, None, None, {'model': 'auto', 'messages': [{'role': 'user', 'content': 'hi'}], 'stream': True})
 
@@ -723,13 +723,13 @@ class OpenAIRelayTests(unittest.TestCase):
                 calls.append((self.provider, str(payload.get('model', '')), payload.get('stream')))
                 if self.provider == 'gemini':
                     return type('AdapterResponse', (), {'status': 200, 'headers': {'Content-Type': 'text/event-stream'}, 'body': None, 'stream': events(), 'content_type': 'text/event-stream'})()
-                return type('AdapterResponse', (), {'status': 200, 'headers': {'Content-Type': 'application/json'}, 'body': b'{"choices":[{"message":{"content":"from-github"}}]}', 'stream': None, 'content_type': 'application/json'})()
+                return type('AdapterResponse', (), {'status': 200, 'headers': {'Content-Type': 'application/json'}, 'body': b'{"choices":[{"message":{"content":"from-groq"}}]}', 'stream': None, 'content_type': 'application/json'})()
 
         relay = OpenAIRelay(
             adapter_factory=lambda provider: Adapter(provider),
             health_loader=lambda: {},
             health_ttl_seconds=60,
-            configured_providers_loader=lambda: ['gemini', 'github'],
+            configured_providers_loader=lambda: ['gemini', 'groq'],
         )
         response = relay.handle_chat(_gemini_chat_request(stream=True))
 
@@ -763,13 +763,13 @@ class OpenAIRelayTests(unittest.TestCase):
                 self.stream_flag = payload.get('stream')
                 if self.provider == 'gemini':
                     return type('AdapterResponse', (), {'status': 200, 'headers': {}, 'body': None, 'stream': iter([_gemini_sse_event('hel'), _gemini_sse_event('lo', 'STOP')]), 'content_type': 'text/event-stream'})()
-                return type('AdapterResponse', (), {'status': 200, 'headers': {}, 'body': b'{"choices":[{"message":{"content":"from-github"}}]}', 'stream': None, 'content_type': 'application/json'})()
+                return type('AdapterResponse', (), {'status': 200, 'headers': {}, 'body': b'{"choices":[{"message":{"content":"from-groq"}}]}', 'stream': None, 'content_type': 'application/json'})()
 
         relay = OpenAIRelay(
             adapter_factory=lambda provider: Adapter(provider),
             health_loader=lambda: {},
             health_ttl_seconds=60,
-            configured_providers_loader=lambda: ['gemini', 'github'],
+            configured_providers_loader=lambda: ['gemini', 'groq'],
         )
         response = relay.handle_chat(_gemini_chat_request(stream=False))
 
@@ -795,21 +795,21 @@ class OpenAIRelayTests(unittest.TestCase):
                 calls.append(self.provider)
                 if self.provider == 'gemini':
                     return type('AdapterResponse', (), {'status': 500, 'headers': {'Content-Type': 'text/event-stream'}, 'body': None, 'stream': iter([b'data: {"error":{"message":"gemini-broke"}}\n\n']), 'content_type': 'text/event-stream'})()
-                return type('AdapterResponse', (), {'status': 200, 'headers': {'Content-Type': 'application/json'}, 'body': b'{"choices":[{"message":{"content":"from-github"}}]}', 'stream': None, 'content_type': 'application/json'})()
+                return type('AdapterResponse', (), {'status': 200, 'headers': {'Content-Type': 'application/json'}, 'body': b'{"choices":[{"message":{"content":"from-groq"}}]}', 'stream': None, 'content_type': 'application/json'})()
 
         relay = OpenAIRelay(
             adapter_factory=lambda provider: Adapter(provider),
             health_loader=lambda: {},
             health_ttl_seconds=60,
-            configured_providers_loader=lambda: ['gemini', 'github'],
+            configured_providers_loader=lambda: ['gemini', 'groq'],
         )
         response = relay.handle_chat(_gemini_chat_request(stream=True))
 
         self.assertEqual(response.status, 200)
         self.assertEqual(calls[0], 'gemini')
-        self.assertIn('github', calls)
+        self.assertIn('groq', calls)
         joined = b''.join(list(response.stream_chunks or []))
-        self.assertIn(b'from-github', joined)
+        self.assertIn(b'from-groq', joined)
         self.assertNotIn(b'gemini-broke', joined)
 
     def test_relay_passes_upstream_sse_through_and_does_not_call_next_provider(self) -> None:
