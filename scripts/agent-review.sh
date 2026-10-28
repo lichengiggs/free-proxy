@@ -89,6 +89,11 @@ cleanup() {
       agent_pipeline_state_put "$STATE_FILE" status stopped || true
       agent_pipeline_state_put "$STATE_FILE" reason crashed || true
       agent_pipeline_state_put "$STATE_FILE" owner_pid "" || true
+      if [[ -n "$PR" ]]; then
+        agent_pipeline_comment_once pr "$PR" \
+          "<!-- agent-pipeline:notice=crashed -->" \
+          "审查进程异常退出（退出码 ${rc}）。流水线停止。删掉 .agent-pipeline/issues/${ISSUE:-?} 才会再试。" || true
+      fi
     fi
   fi
   rm -rf "$WORKDIR"

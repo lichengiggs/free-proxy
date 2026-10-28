@@ -103,7 +103,8 @@ GitHub checks 还在跑时，后续轮询继续等（默认 10 轮）。head SHA
 | 缺少 Goal、Acceptance 或 Only-edit | 评论，停止（`malformed`） | 只有 Issue 正文哈希变了才会再看一次 |
 | 实现者没有产生提交 | 评论，停止 | 否 |
 | diff 超出 Only-edit | 评论，停止 | 否 |
-| 开 PR 前本地测试失败 | 评论，停止 | 否 |
+| 开 PR 前本地测试失败，且质量闸门唯一问题是 `def test_` 变少 | 评论 Issue，把缺口写进 notes，同一分支再实现 | 最多 2 轮，和审查 FIX 共用 `fix_rounds` |
+| 开 PR 前其他测试失败，或数量补齐轮次用尽 | 评论，停止（`tests_failed`） | 否 |
 | 审查者给出 FIX | 再实现一轮 | 最多 2 轮 |
 | 2 轮 FIX 之后又是 FIX | 强制 REJECT，停止 | 否 |
 | 审查者给出 REJECT | 评论，停止 | 否 |
@@ -232,12 +233,14 @@ uv run python -m unittest discover -s python_scripts/tests -p 'test_*.py' -v
 
 没有 `uv` 时，脚本改用 `python3 -m unittest`，参数相同。`-v` 让日志里留下每条测试的名字。本地手跑可以不带 `-v`。
 
-这条命令退出码是 0 还不够。流水线另外拒绝合并，并且不会自动再开一轮修复：
+这条命令退出码是 0 还不够。流水线在开 PR 前还会看这些条件：
 
 - 没有 `python_scripts/tests`，或日志里没有单独一行 `OK`
-- 工作区里 `def test_` 的数量少于 `origin/<base>`
-- `python_scripts/tests/test_public_contract.py` 的 blob 和 `origin/<base>` 不一致，或日志里没有 `test_process_stream_reaches_done` 和 `test_console_journey` 的 ok
+- 工作区里 `def test_` 的数量少于 `origin/<base>`。这是唯一问题时，评论 Issue，把差额写进 notes，并在同一分支上再实现，最多 2 轮。轮次和审查 FIX 共用。用尽后停止，不再自动改
+- `python_scripts/tests/test_public_contract.py` 的 blob 和 `origin/<base>` 不一致，或日志里没有 `test_process_stream_reaches_done` 和 `test_console_journey` 的 ok。契约变化不自动再改
 - Acceptance 写了 `live provider: required`，但日志里没有单独一行 `live provider: ok`
+
+数量补齐发生在 push 之前。失败的那次提交留在本地分支 `agent/fix-<issue>`，远端还没有这个分支时，下一轮直接检出本地分支。
 
 公开契约文件只在人工提交里改。自动流水线改了它，开 PR 前就会停。
 

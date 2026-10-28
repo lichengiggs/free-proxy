@@ -12,6 +12,7 @@
 - 改代码前读仓库根目录 `LESSONS.md` 的「仍有效」，并遵守用得上的规则。不要在这次实现里改 `LESSONS.md` 或 `AGENTS.md`，除非 `Only-edit` 写了它们。
 - Issue 若有 `Surface`，验收对着那个入口做。换一个入口通过，不算做完。
 - 新行为加一条用用户能看到的结果命名的测试。断言写 Acceptance 里的结果。
+- 删掉旧测试时，工作区里 `def test_` 的数量不能少于 `origin/<base>`。少了就补新的测试方法，不要靠删别的测试把数量凑回去。只少数量时，流水线会把缺口写进 NOTES，并在同一分支上再叫你，最多 2 轮。
 - 优先复用已有 transport。不要为了一个状态码再写一个新的 Fake 类。
 - 不要修改 `python_scripts/tests/test_public_contract.py`，也不要把它写进 Only-edit。公开行为要改时，留给人工提交。
 

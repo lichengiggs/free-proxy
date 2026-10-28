@@ -89,6 +89,9 @@ cleanup() {
       agent_pipeline_state_put "$STATE_FILE" status stopped || true
       agent_pipeline_state_put "$STATE_FILE" reason crashed || true
       agent_pipeline_state_put "$STATE_FILE" owner_pid "" || true
+      agent_pipeline_comment_once issue "$ISSUE" \
+        "<!-- agent-pipeline:notice=crashed -->" \
+        "实现进程异常退出（退出码 ${rc}）。流水线停止。删掉 .agent-pipeline/issues/${ISSUE} 才会再试。" || true
     fi
   fi
   rm -rf "$WORKDIR"
@@ -334,9 +337,44 @@ test_rc=$?
 set -e
 if [[ "$test_rc" -ne 0 ]]; then
   test_tail=$(tail -n 30 "$test_log" || true)
+  gate_report=$(agent_pipeline_pre_pr_test_action "$test_log" "$fix_rounds" "$AGENT_PIPELINE_MAX_FIX_ROUNDS")
+  gate_action=$(printf '%s\n' "$gate_report" | sed -n '1p')
+  gate_base=$(printf '%s\n' "$gate_report" | sed -n '2p')
+  gate_work=$(printf '%s\n' "$gate_report" | sed -n '3p')
+  gate_base=${gate_base:-0}
+  gate_work=${gate_work:-0}
+  if [[ "$gate_action" == "retry" ]]; then
+    fix_rounds=$((fix_rounds + 1))
+    notes_file="$AGENT_PIPELINE_STATE_DIR/issues/${ISSUE}.notes"
+    mkdir -p "$(dirname "$notes_file")"
+    cat > "$notes_file" <<EOF
+工作区里的 def test_ 有 ${gate_work} 个，origin/${base} 有 ${gate_base} 个。补上 $((gate_base - gate_work)) 个新测试方法，让数量不少于基线。不要删掉其他测试来凑数。不要改 python_scripts/tests/test_public_contract.py。
+EOF
+    agent_pipeline_state_put "$STATE_FILE" fix_rounds "$fix_rounds"
+    agent_pipeline_state_put "$STATE_FILE" status needs_fix
+    agent_pipeline_state_put "$STATE_FILE" reason ""
+    agent_pipeline_state_put "$STATE_FILE" owner_pid ""
+    STARTED=0
+    agent_pipeline_comment_once issue "$ISSUE" \
+      "<!-- agent-pipeline:notice=test-count-retry round=${fix_rounds} -->" \
+      "开 PR 前的测试数量不够：工作区 ${gate_work} 个 def test_，origin/${base} 是 ${gate_base} 个。流水线会在同一分支上再改（第 ${fix_rounds}/${AGENT_PIPELINE_MAX_FIX_ROUNDS} 轮），这一轮不 push。
+
+下一轮 NOTES:
+
+$(cat "$notes_file")"
+    agent_pipeline_log "issue #$ISSUE 测试数量不足，安排第 ${fix_rounds} 轮修复"
+    exit 0
+  fi
+  count_note=""
+  if [[ "$gate_base" =~ ^[0-9]+$ && "$gate_work" =~ ^[0-9]+$ && "$gate_base" -gt "$gate_work" ]]; then
+    count_note="def test_ 仍少于 origin/${base}（base=${gate_base} work=${gate_work}）。"
+    if [[ "$fix_rounds" -ge "$AGENT_PIPELINE_MAX_FIX_ROUNDS" ]]; then
+      count_note="${count_note}已经用完 ${AGENT_PIPELINE_MAX_FIX_ROUNDS} 轮补齐。"
+    fi
+  fi
   stop_issue tests_failed \
     "<!-- agent-pipeline:notice=tests-failed sha=${body_sha} -->" \
-    "开 PR 前本地测试失败（退出码 ${test_rc}）。流水线没有 push。日志尾部:
+    "开 PR 前本地测试失败（退出码 ${test_rc}）。${count_note}流水线没有 push，不会再自动修改。日志尾部:
 
 ${test_tail}"
 fi

@@ -688,6 +688,64 @@ agent_pipeline_merge_gate() {
   esac
 }
 
+# 三行: retry|stop、base 的 def test_ 数量、工作区数量。
+# 只有 unittest 通过、表面检查通过、质量闸门唯一问题是 count、且还没走完修复轮次时才 retry。
+agent_pipeline_pre_pr_test_action() {
+  local log="$1" rounds="${2:-0}" max_rounds="${3:-0}"
+  local line section unit gate_status problems surface base work action
+  unit="1"
+  gate_status=""
+  problems=""
+  surface=""
+  base="0"
+  work="0"
+  section=""
+  action="stop"
+  if [[ -f "$log" ]]; then
+    while IFS= read -r line || [[ -n "$line" ]]; do
+      case "$line" in
+        unittest_exit=*)
+          unit="${line#unittest_exit=}"
+          section=""
+          ;;
+        quality_gate:)
+          section="gate"
+          ;;
+        surface_gate:)
+          section="surface"
+          ;;
+        test_defs\ base=*\ work=*)
+          section=""
+          base="${line#test_defs base=}"
+          base="${base%% work=*}"
+          work="${line##* work=}"
+          ;;
+        "")
+          ;;
+        *)
+          if [[ "$section" == "gate" ]]; then
+            if [[ -z "$gate_status" ]]; then
+              gate_status="$line"
+            elif [[ -z "$problems" ]]; then
+              problems="$line"
+            else
+              problems="${problems},${line}"
+            fi
+          elif [[ "$section" == "surface" && -z "$surface" ]]; then
+            surface="$line"
+          fi
+          ;;
+      esac
+    done < "$log"
+  fi
+  if [[ "$unit" == "0" && "$gate_status" == "stop" && "$problems" == "count" && "$surface" == "pass" \
+      && "$base" =~ ^[0-9]+$ && "$work" =~ ^[0-9]+$ && "$rounds" =~ ^[0-9]+$ && "$max_rounds" =~ ^[0-9]+$ \
+      && "$base" -gt "$work" && "$rounds" -lt "$max_rounds" ]]; then
+    action="retry"
+  fi
+  printf '%s\n%s\n%s\n' "$action" "$base" "$work"
+}
+
 # wait | timeout
 agent_pipeline_checks_wait() {
   local polls="$1" max_polls="$2"
@@ -860,10 +918,11 @@ agent_pipeline_live_provider_report() {
     (cd "$repo" && python3 scripts/check_live_provider.py) >"$log" 2>&1
   fi
   rc=$?
-  set -e
   printf 'exit %s\n' "$rc"
   cat "$log"
   rm -f "$log"
+  # 调用方要收下退出码。这里若留下 set -e，return 0 也会把外层 errexit 打开。
+  set +e
   return 0
 }
 
@@ -894,7 +953,6 @@ agent_pipeline_run_project_tests() {
     (cd "$wt" && python3 -m unittest discover -s python_scripts/tests -p 'test_*.py' -v) >"$log" 2>&1
   fi
   unit_rc=$?
-  set -e
   base_count=$(agent_pipeline_count_test_defs "$wt" "origin/${base}")
   work_count=$(agent_pipeline_count_test_defs "$wt")
   if ! base_hash=$(git -C "$wt" rev-parse "origin/${base}:python_scripts/tests/test_public_contract.py" 2>/dev/null); then
@@ -927,8 +985,11 @@ agent_pipeline_run_project_tests() {
       printf 'surface_gate:\n%s\n' "$surface"
       printf 'test_defs base=%s work=%s\n' "$base_count" "$work_count"
     } | tee -a "$log" >/dev/null
+    # 失败返回前关掉 set -e。嵌套调用可能把它打开，外层正包在 set +e 里收下退出码。
+    set +e
     return 1
   fi
+  set +e
   return 0
 }
 
@@ -967,15 +1028,25 @@ agent_pipeline_prepare_detached_worktree() {
 
 agent_pipeline_prepare_existing_worktree() {
   local wt="$1" branch="$2"
+  local root="$AGENT_PIPELINE_MAIN_ROOT"
   mkdir -p "$(dirname "$wt")"
   agent_pipeline_remove_worktree "$wt"
-  git -C "$AGENT_PIPELINE_MAIN_ROOT" fetch origin "$branch"
-  if agent_pipeline_branch_exists_local "$branch"; then
-    git -C "$AGENT_PIPELINE_MAIN_ROOT" worktree add "$wt" "$branch"
-    git -C "$wt" merge --ff-only "origin/$branch"
-  else
-    git -C "$AGENT_PIPELINE_MAIN_ROOT" worktree add -b "$branch" --track "$wt" "origin/$branch"
+  # 开 PR 前的数量补齐还没 push。本地分支在、远端没有时，直接检出本地分支。
+  if agent_pipeline_branch_exists_remote "$branch"; then
+    git -C "$root" fetch origin "$branch"
   fi
+  if agent_pipeline_branch_exists_local "$branch"; then
+    git -C "$root" worktree add "$wt" "$branch"
+    if git -C "$wt" rev-parse --verify --quiet "refs/remotes/origin/${branch}" >/dev/null; then
+      git -C "$wt" merge --ff-only "origin/${branch}"
+    fi
+    return 0
+  fi
+  if agent_pipeline_branch_exists_remote "$branch"; then
+    git -C "$root" worktree add -b "$branch" --track "$wt" "origin/${branch}"
+    return 0
+  fi
+  agent_pipeline_die "找不到本地或远端分支 ${branch}"
 }
 
 agent_pipeline_comment_once() {

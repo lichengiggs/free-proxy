@@ -325,6 +325,142 @@ else
   FAIL=1
 fi
 
+cat > "$TMP/count-only.log" <<'EOF'
+local test gate failed
+unittest_exit=0
+quality_gate:
+stop
+count
+surface_gate:
+pass
+test_defs base=209 work=207
+EOF
+count_retry=$(agent_pipeline_pre_pr_test_action "$TMP/count-only.log" 0 2)
+assert_eq "只少测试数量时安排再改" "$count_retry" "$(printf 'retry\n209\n207')"
+count_done=$(agent_pipeline_pre_pr_test_action "$TMP/count-only.log" 2 2)
+assert_eq "数量补齐轮次用尽后停止" "$(printf '%s\n' "$count_done" | head -n 1)" "stop"
+
+cat > "$TMP/count-and-contract.log" <<'EOF'
+local test gate failed
+unittest_exit=0
+quality_gate:
+stop
+count
+contract
+surface_gate:
+pass
+test_defs base=3 work=2
+EOF
+mixed=$(agent_pipeline_pre_pr_test_action "$TMP/count-and-contract.log" 0 2)
+assert_eq "契约也变了就不再自动改" "$(printf '%s\n' "$mixed" | head -n 1)" "stop"
+
+cat > "$TMP/red-and-count.log" <<'EOF'
+local test gate failed
+unittest_exit=1
+quality_gate:
+stop
+count
+surface_gate:
+pass
+test_defs base=3 work=2
+EOF
+red=$(agent_pipeline_pre_pr_test_action "$TMP/red-and-count.log" 0 2)
+assert_eq "unittest 失败时不因为数量再改" "$(printf '%s\n' "$red" | head -n 1)" "stop"
+
+cat > "$TMP/count-surface.log" <<'EOF'
+local test gate failed
+unittest_exit=0
+quality_gate:
+stop
+count
+surface_gate:
+stop
+console
+test_defs base=3 work=2
+EOF
+surface_stop=$(agent_pipeline_pre_pr_test_action "$TMP/count-surface.log" 0 2)
+assert_eq "表面检查失败时不因为数量再改" "$(printf '%s\n' "$surface_stop" | head -n 1)" "stop"
+
+mkdir -p "$TMP/bin" "$TMP/gate-repo/python_scripts/tests"
+cat > "$TMP/bin/uv" <<'EOF'
+#!/bin/bash
+if [[ "${1:-}" == "run" ]]; then
+  shift
+fi
+if [[ "${1:-}" == "python" ]]; then
+  shift
+fi
+exec python3 "$@"
+EOF
+chmod +x "$TMP/bin/uv"
+cat > "$TMP/gate-repo/python_scripts/tests/test_public_contract.py" <<'EOF'
+import unittest
+
+class ContractTests(unittest.TestCase):
+    def test_console_journey(self):
+        pass
+
+    def test_process_stream_reaches_done(self):
+        pass
+EOF
+cat > "$TMP/gate-repo/python_scripts/tests/test_extra.py" <<'EOF'
+import unittest
+
+class ExtraTests(unittest.TestCase):
+    def test_extra_one(self):
+        pass
+EOF
+git -C "$TMP/gate-repo" init -b main >/dev/null
+git -C "$TMP/gate-repo" add python_scripts
+git -C "$TMP/gate-repo" -c user.email=pipeline@example.com -c user.name=pipeline -c commit.gpgsign=false commit -m init >/dev/null
+git -C "$TMP/gate-repo" update-ref refs/remotes/origin/main HEAD
+rm "$TMP/gate-repo/python_scripts/tests/test_extra.py"
+old_path="$PATH"
+PATH="$TMP/bin:$PATH"
+gate_caller() {
+  set -e
+  set +e
+  agent_pipeline_run_project_tests "$TMP/gate-repo" "$TMP/gate-run.log" main
+  echo "rc=$?"
+}
+set +e
+gate_out=$(gate_caller)
+gate_caller_rc=$?
+set -e
+PATH="$old_path"
+assert_eq "数量闸门失败后调用方还能收下退出码" "$gate_out" "rc=1"
+assert_eq "数量闸门失败不把外层打成退出" "$gate_caller_rc" "0"
+if grep -q "quality_gate:" "$TMP/gate-run.log" && grep -q "^count$" "$TMP/gate-run.log"; then
+  printf 'ok 数量不足写进测试日志\n'
+else
+  printf 'FAIL 数量不足写进测试日志\n' >&2
+  FAIL=1
+fi
+live_gate=$(agent_pipeline_pre_pr_test_action "$TMP/gate-run.log" 0 2)
+assert_eq "真实日志里的数量不足可以再改" "$(printf '%s\n' "$live_gate" | head -n 1)" "retry"
+
+local_repo=$(mktemp -d "$TMP/local-repo.XXXXXX")
+git -C "$local_repo" init -b main >/dev/null
+printf 'keep\n' > "$local_repo/README"
+git -C "$local_repo" add README
+git -C "$local_repo" -c user.email=pipeline@example.com -c user.name=pipeline -c commit.gpgsign=false commit -m init >/dev/null
+git -C "$local_repo" branch agent/fix-7
+old_main_root=${AGENT_PIPELINE_MAIN_ROOT:-}
+AGENT_PIPELINE_MAIN_ROOT="$local_repo"
+agent_pipeline_prepare_existing_worktree "$local_repo/wt" agent/fix-7
+if [[ -f "$local_repo/wt/README" ]]; then
+  printf 'ok 未 push 的本地分支可以再检出\n'
+else
+  printf 'FAIL 未 push 的本地分支可以再检出\n' >&2
+  FAIL=1
+fi
+git -C "$local_repo" worktree remove --force "$local_repo/wt" || true
+if [[ -n "$old_main_root" ]]; then
+  AGENT_PIPELINE_MAIN_ROOT="$old_main_root"
+else
+  unset AGENT_PIPELINE_MAIN_ROOT
+fi
+
 for script in agent-implement.sh agent-review.sh agent-poll.sh agent-night-review.sh; do
   bash -n "$ROOT/scripts/$script"
   "$ROOT/scripts/$script" --help >/dev/null

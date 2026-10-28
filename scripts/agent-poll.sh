@@ -170,7 +170,7 @@ process_issue() {
   fi
 
   action=$(agent_pipeline_issue_action "$status" "$reason" "$body_sha" "$stored_sha" "$pr_kind")
-  agent_pipeline_log "issue #$issue 动作=$action 状态=${status:-new} pr=$pr_kind"
+  agent_pipeline_log "issue #$issue 动作=$action 状态=${status:-new} 原因=${reason:-none} pr=$pr_kind"
   advanced=0
 
   case "$action" in
