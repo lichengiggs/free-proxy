@@ -2,9 +2,36 @@ from __future__ import annotations
 
 import os
 import unittest
+from contextlib import contextmanager
 from pathlib import Path
 
-from python_scripts.provider_catalog import PROVIDERS, configured_provider_names, get_provider, list_providers
+from python_scripts.provider_catalog import CLOUDFLARE_PAID_MODEL_IDS, PROVIDERS, configured_provider_names, get_provider, list_providers
+
+
+@contextmanager
+def _env(updates: dict[str, str | None]):
+    old = {key: os.environ.get(key) for key in updates}
+    for key, value in updates.items():
+        if value is None:
+            os.environ.pop(key, None)
+        else:
+            os.environ[key] = value
+    try:
+        yield
+    finally:
+        for key, value in old.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
+
+
+_CF_ACCOUNT = '0123456789abcDEF0123456789abcDEF'
+_CF_ENV_CLEAR = {
+    'CLOUDFLARE_API_KEY': None,
+    'CLOUDFLARE_ACCOUNT_ID': None,
+    'FREE_PROXY_TEST_UPSTREAM': None,
+}
 
 
 class ProviderCatalogTests(unittest.TestCase):
@@ -197,8 +224,101 @@ class ProviderCatalogTests(unittest.TestCase):
             'gemini': ('gemini-3.1-flash-lite-preview',),
             'mistral': ('mistral-large-latest',),
             'nvidia': ('meta/llama-3.1-70b-instruct',),
+            'cloudflare': ('@cf/meta/llama-3.1-8b-instruct',),
             'amd': ('DeepSeek-V4-Flash',),
         }
         self.assertEqual({item.name: item.model_hints for item in PROVIDERS}, expected)
         for item in PROVIDERS:
             self.assertEqual(len(item.model_hints), 1)
+
+    def test_cloudflare_stays_unconfigured_until_token_and_account_id_are_both_valid(self) -> None:
+        self.assertNotIn('cloudflare', configured_provider_names({'CLOUDFLARE_API_KEY': 'cf-token-example-1234'}))
+        self.assertNotIn('cloudflare', configured_provider_names({'CLOUDFLARE_ACCOUNT_ID': _CF_ACCOUNT}))
+        self.assertNotIn('cloudflare', configured_provider_names({
+            'CLOUDFLARE_API_KEY': 'cf-token-example-1234',
+            'CLOUDFLARE_ACCOUNT_ID': 'not-a-valid-account',
+        }))
+        self.assertNotIn('cloudflare', configured_provider_names({
+            'CLOUDFLARE_API_KEY': '   ',
+            'CLOUDFLARE_ACCOUNT_ID': _CF_ACCOUNT,
+        }))
+        self.assertEqual(
+            configured_provider_names({
+                'CLOUDFLARE_API_KEY': 'cf-token-example-1234',
+                'CLOUDFLARE_ACCOUNT_ID': _CF_ACCOUNT,
+            }),
+            ['cloudflare'],
+        )
+
+    def test_cloudflare_base_url_inserts_account_id_without_changing_case(self) -> None:
+        with _env({**_CF_ENV_CLEAR, 'CLOUDFLARE_API_KEY': 'cf-token-example-1234', 'CLOUDFLARE_ACCOUNT_ID': _CF_ACCOUNT}):
+            catalog = next(item for item in PROVIDERS if item.name == 'cloudflare')
+            self.assertEqual(catalog.base_url, 'https://api.cloudflare.com/client/v4/accounts/{account_id}/ai/v1')
+            self.assertEqual(catalog.api_key_env, 'CLOUDFLARE_API_KEY')
+            self.assertEqual(catalog.account_id_env, 'CLOUDFLARE_ACCOUNT_ID')
+            self.assertEqual([item.name for item in PROVIDERS][-2:], ['cloudflare', 'amd'])
+            provider = get_provider('cloudflare')
+            self.assertEqual(provider.name, 'cloudflare')
+            self.assertEqual(provider.model_hints, ('@cf/meta/llama-3.1-8b-instruct',))
+            self.assertEqual(
+                provider.base_url,
+                f'https://api.cloudflare.com/client/v4/accounts/{_CF_ACCOUNT}/ai/v1',
+            )
+            self.assertNotIn('{account_id}', provider.base_url)
+            self.assertEqual(catalog.base_url, 'https://api.cloudflare.com/client/v4/accounts/{account_id}/ai/v1')
+            self.assertEqual(
+                CLOUDFLARE_PAID_MODEL_IDS,
+                frozenset({
+                    '@cf/moonshotai/kimi-k2.6',
+                    '@cf/moonshotai/kimi-k2.7-code',
+                    '@cf/zai-org/glm-5.2',
+                    '@cf/zai-org/glm-5.3',
+                    '@cf/zai-org/glm-5.3-flash',
+                    '@cf/deepseek-ai/deepseek-v4-flash-0731',
+                    '@cf/deepseek-ai/deepseek-v4.1-flash-1017',
+                    '@cf/deepseek-ai/deepseek-v4-pro-0813',
+                }),
+            )
+
+    def test_invalid_cloudflare_account_id_keeps_name_and_hint(self) -> None:
+        invalid_ids = ['', 'a' * 31, 'a' * 33, 'g' * 32, 'abcd/ef0123456789abcdef0123456789', '..' + 'ab' * 15, '0123456789abcdef 123456789abcdef']
+        for account_id in invalid_ids:
+            with self.subTest(account_id=account_id):
+                with _env({**_CF_ENV_CLEAR, 'CLOUDFLARE_API_KEY': 'cf-token-example-1234', 'CLOUDFLARE_ACCOUNT_ID': account_id}):
+                    provider = get_provider('cloudflare')
+                    self.assertEqual(provider.name, 'cloudflare')
+                    self.assertEqual(provider.model_hints, ('@cf/meta/llama-3.1-8b-instruct',))
+                    self.assertEqual(provider.base_url, 'https://api.cloudflare.com/client/v4/accounts/{account_id}/ai/v1')
+                    if account_id:
+                        self.assertNotIn(account_id, provider.base_url)
+
+    def test_cloudflare_test_upstream_does_not_insert_account_id(self) -> None:
+        with _env({
+            **_CF_ENV_CLEAR,
+            'FREE_PROXY_TEST_UPSTREAM': 'http://127.0.0.1:9',
+            'CLOUDFLARE_API_KEY': 'cf-token-example-1234',
+            'CLOUDFLARE_ACCOUNT_ID': _CF_ACCOUNT,
+        }):
+            provider = get_provider('cloudflare')
+            self.assertEqual(provider.base_url, 'http://127.0.0.1:9')
+            self.assertNotIn(_CF_ACCOUNT, provider.base_url)
+            self.assertNotIn('api.cloudflare.com', provider.base_url)
+            self.assertEqual(provider.model_hints, ('@cf/meta/llama-3.1-8b-instruct',))
+            self.assertNotIn('cloudflare', configured_provider_names({'CLOUDFLARE_API_KEY': 'cf-token-example-1234'}))
+
+    def test_readme_and_changelog_say_cloudflare_needs_token_and_account_id(self) -> None:
+        root = Path(__file__).resolve().parents[2]
+        for name in ('README.md', 'README_EN.md'):
+            text = (root / name).read_text(encoding='utf-8')
+            self.assertIn('Cloudflare Workers AI', text)
+            self.assertIn('@cf/meta/llama-3.1-8b-instruct', text)
+            self.assertIn('API Token', text)
+            self.assertIn('Account ID', text)
+            self.assertIn('10,000', text)
+            self.assertIn('00:00 UTC', text)
+            self.assertIn('http://127.0.0.1:8765/v1', text)
+        changelog = (root / 'CHANGELOG.md').read_text(encoding='utf-8')
+        self.assertIn('Cloudflare Workers AI 需要 API Token 和 Account ID', changelog)
+        research = (root / 'docs' / 'research.md').read_text(encoding='utf-8')
+        self.assertIn('CLOUDFLARE_ACCOUNT_ID', research)
+        self.assertIn('合法 Account ID', research)

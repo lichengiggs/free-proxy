@@ -16,7 +16,7 @@ from .protocol_converter import iter_gemini_sse_as_openai_chunks
 from .response_normalizer import synthesize_openai_json_from_sse
 from .preferred_model_store import load_preferred_model, save_preferred_model
 from .provider_adapter import ProviderAdapter
-from .provider_catalog import configured_provider_names, get_model_capabilities, get_provider, get_provider_model_hints, list_providers, test_upstream_base_url
+from .provider_catalog import configured_provider_names, get_model_capabilities, get_provider, get_provider_model_hints, is_valid_account_id, list_providers, test_upstream_base_url
 from .provider_errors import ProviderError, ProviderHTTPError
 from .provider_routing import AliasName, PUBLIC_MODEL_ALIASES, ResolvedModelRequest, choose_candidates, resolve_alias_candidates, resolve_model_request
 from .provider_transport import Transport
@@ -140,6 +140,8 @@ class ProxyService:
 
     def provider_adapter(self, provider_name: str) -> ProviderAdapter:
         provider = get_provider(provider_name)
+        if '{account_id}' in provider.base_url:
+            raise ProviderError('cloudflare Account ID 缺失或非法，未向 api.cloudflare.com 发出请求')
         api_key = os.environ.get(provider.api_key_env, '').strip()
         if not api_key:
             raise ProviderError(f'{provider_name} 没有配置 API Key')
@@ -210,6 +212,16 @@ class ProxyService:
         statuses: dict[str, dict[str, object]] = {}
         for provider in list_providers():
             value = str(values.get(provider.api_key_env, '')).strip()
+            if provider.account_id_env:
+                account_id = str(values.get(provider.account_id_env, ''))
+                statuses[provider.name] = {
+                    'configured': bool(value) and is_valid_account_id(account_id),
+                    'masked': self._mask_key(value) if value else '',
+                    'env': provider.api_key_env,
+                    'account_id_masked': self._mask_key(account_id) if account_id else '',
+                    'account_id_env': provider.account_id_env,
+                }
+                continue
             statuses[provider.name] = {
                 'configured': bool(value),
                 'masked': self._mask_key(value) if value else '',
@@ -217,9 +229,39 @@ class ProxyService:
             }
         return statuses
 
-    def save_provider_key(self, provider_name: str, api_key: str) -> dict[str, object]:
+    def save_provider_key(self, provider_name: str, api_key: str, account_id: str | None = None) -> dict[str, object]:
+        """Save a provider credential, or both Cloudflare credentials together.
+
+        Args:
+            provider_name: Catalog provider name.
+            api_key: API token. Surrounding whitespace is removed.
+            account_id: Cloudflare account id. Other providers ignore this value.
+                It must already be 32 hexadecimal characters; spaces are not stripped.
+
+        Returns:
+            A status payload with masked credential text and no raw secret.
+
+        Raises:
+            ProviderError: The provider is unknown, the token is empty, or Cloudflare
+            is missing either value or has an account id that is not 32 hex characters.
+            Neither Cloudflare environment variable is written in that case.
+        """
         provider = get_provider(provider_name)
         value = api_key.strip()
+        if provider.account_id_env:
+            raw_account = account_id if isinstance(account_id, str) else ''
+            if not value or not is_valid_account_id(raw_account):
+                raise ProviderError('cloudflare 需要 API Token 和 32 位十六进制 Account ID')
+            upsert_env(self.dotenv_path, provider.api_key_env, value)
+            upsert_env(self.dotenv_path, provider.account_id_env, raw_account)
+            os.environ[provider.api_key_env] = value
+            os.environ[provider.account_id_env] = raw_account
+            return {
+                'ok': True,
+                'provider': provider.name,
+                'masked': self._mask_key(value),
+                'account_id_masked': self._mask_key(raw_account),
+            }
         if not value:
             raise ProviderError('api_key 不能为空')
         upsert_env(self.dotenv_path, provider.api_key_env, value)

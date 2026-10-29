@@ -16,7 +16,7 @@
 - 一个稳定模型别名：`free-proxy/auto`
 - 多 provider 自动回退，某家失败时可切到其他可用模型
 - 本地 Web 页面配置 API Key，不用手改复杂配置
-- 控制台可配置的 provider：OpenRouter / Groq / Gemini / Mistral / NVIDIA NIM / AMD Token Factory
+- 控制台可配置的 provider：OpenRouter / Groq / Gemini / Mistral / NVIDIA NIM / Cloudflare Workers AI / AMD Token Factory
 
 ## 当前稳定接口
 
@@ -73,6 +73,7 @@ uv run free-proxy serve
 | Gemini | `gemini-3.1-flash-lite-preview` | 免费层回退 | 免费层稳定，适合回退 |
 | Mistral | `mistral-large-latest` | 稳定后备 | 质量稳，适合补位 |
 | NVIDIA NIM | `meta/llama-3.1-70b-instruct` | 补充选择 | 当前内置推荐是这一条 |
+| Cloudflare Workers AI | `@cf/meta/llama-3.1-8b-instruct` | 免费额度 | 需要同时填写 API Token 和 Account ID。每天 10,000 Neurons，00:00 UTC 重置 |
 | AMD Token Factory | `DeepSeek-V4-Flash` | 补充选择 | 免费额度里的补充选择 |
 
 如果你只记一条：

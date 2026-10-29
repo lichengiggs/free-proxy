@@ -338,6 +338,59 @@ class ProviderRoutingTests(unittest.TestCase):
         self.assertEqual(select_listed_model('sambanova', ['DeepSeek-V3.1', 'other']), 'DeepSeek-V3.1')
         self.assertEqual(select_listed_model('sambanova', ['first-model', 'second-model']), 'first-model')
 
+    def test_free_proxy_auto_does_not_select_cloudflare_paid_models(self) -> None:
+        paid = [
+            '@cf/moonshotai/kimi-k2.6',
+            '@cf/moonshotai/kimi-k2.7-code',
+            '@cf/zai-org/glm-5.2',
+            '@cf/zai-org/glm-5.3',
+            '@cf/zai-org/glm-5.3-flash',
+            '@cf/deepseek-ai/deepseek-v4-flash-0731',
+            '@cf/deepseek-ai/deepseek-v4.1-flash-1017',
+            '@cf/deepseek-ai/deepseek-v4-pro-0813',
+        ]
+        hint = '@cf/meta/llama-3.1-8b-instruct'
+        self.assertEqual(select_listed_model('cloudflare', [paid[0], hint, paid[1]]), hint)
+        self.assertIsNone(select_listed_model('cloudflare', paid))
+
+        remembered = build_auto_candidates(
+            requested_model=f'cloudflare/{paid[0]}',
+            configured=['cloudflare'],
+            health={f'cloudflare/{paid[0]}': {'ok': True, 'checked_at': 90}},
+            now_ts=100,
+            ttl_seconds=600,
+            listed_models={'cloudflare': paid},
+        )
+        self.assertEqual([(item.provider, item.model) for item in remembered], [('cloudflare', hint)])
+        self.assertTrue(all(item.model not in paid for item in remembered))
+
+        failed = build_auto_candidates(
+            requested_model=None,
+            configured=['cloudflare'],
+            health={},
+            now_ts=100,
+            ttl_seconds=600,
+            listed_models={'cloudflare': None},
+        )
+        self.assertEqual([(item.provider, item.model) for item in failed], [('cloudflare', hint)])
+
+    def test_auto_tries_cloudflare_success_before_a_different_listed_model(self) -> None:
+        items = build_auto_candidates(
+            requested_model=None,
+            configured=['cloudflare'],
+            health={'cloudflare/@cf/meta/llama-3.1-8b-instruct': {'ok': True, 'checked_at': 50}},
+            now_ts=80,
+            ttl_seconds=600,
+            listed_models={'cloudflare': ['@cf/meta/llama-3.2-3b-instruct']},
+        )
+        self.assertEqual(
+            [(item.provider, item.model) for item in items],
+            [
+                ('cloudflare', '@cf/meta/llama-3.1-8b-instruct'),
+                ('cloudflare', '@cf/meta/llama-3.2-3b-instruct'),
+            ],
+        )
+
     def test_auto_candidate_docs_describe_success_then_refresh_then_hint(self) -> None:
         root = Path(__file__).resolve().parents[2]
         agents = (root / 'AGENTS.md').read_text(encoding='utf-8')

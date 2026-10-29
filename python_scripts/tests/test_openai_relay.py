@@ -1557,3 +1557,60 @@ class CooldownRelayTests(unittest.TestCase):
         self.assertEqual(set(body), {'id', 'object', 'created', 'model', 'choices', 'usage'})
         self.assertEqual(body['choices'][0]['message']['content'], 'plain-ok')
         self.assertNotIn(b'fallback', response.body or b'')
+
+    def test_free_proxy_auto_does_not_call_cloudflare_paid_models(self) -> None:
+        paid = [
+            '@cf/moonshotai/kimi-k2.6',
+            '@cf/moonshotai/kimi-k2.7-code',
+            '@cf/zai-org/glm-5.2',
+            '@cf/zai-org/glm-5.3',
+            '@cf/zai-org/glm-5.3-flash',
+            '@cf/deepseek-ai/deepseek-v4-flash-0731',
+            '@cf/deepseek-ai/deepseek-v4.1-flash-1017',
+            '@cf/deepseek-ai/deepseek-v4-pro-0813',
+        ]
+        hint = '@cf/meta/llama-3.1-8b-instruct'
+        calls: list[str] = []
+
+        def factory(provider: str):
+            if provider != 'cloudflare':
+                raise AssertionError(provider)
+
+            class Adapter:
+                def list_models(self) -> list[str]:
+                    return list(paid)
+
+                def forward_chat(self, payload: dict[str, object]):
+                    calls.append(str(payload.get('model', '')))
+                    return _ok_response('llama-ok')
+
+            return Adapter()
+
+        health = {f'cloudflare/{paid[0]}': {'ok': True, 'checked_at': 1_700_000_000}}
+        relay, _memory, _hashes = self._relay(factory, ['cloudflare'], health=health)
+        response = relay.handle_chat(_chat_request())
+        self.assertEqual(response.status, 200)
+        self.assertEqual(calls, [hint])
+        self.assertTrue(all(model not in paid for model in calls))
+
+    def test_free_proxy_auto_uses_llama_hint_when_cloudflare_list_fails(self) -> None:
+        calls: list[str] = []
+
+        def factory(provider: str):
+            if provider != 'cloudflare':
+                raise AssertionError(provider)
+
+            class Adapter:
+                def list_models(self) -> list[str]:
+                    raise ProviderError('cloudflare model list failed')
+
+                def forward_chat(self, payload: dict[str, object]):
+                    calls.append(str(payload.get('model', '')))
+                    return _ok_response('hint-ok')
+
+            return Adapter()
+
+        relay, _memory, _hashes = self._relay(factory, ['cloudflare'])
+        response = relay.handle_chat(_chat_request())
+        self.assertEqual(response.status, 200)
+        self.assertEqual(calls, ['@cf/meta/llama-3.1-8b-instruct'])

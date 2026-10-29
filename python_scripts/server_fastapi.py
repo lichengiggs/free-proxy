@@ -14,6 +14,7 @@ from fastapi.staticfiles import StaticFiles
 
 from .config import settings
 from .opencode_config import configure_opencode_provider, detect_opencode_config
+from .provider_catalog import PROVIDER_MAP, is_valid_account_id
 from .provider_errors import ProviderError
 from .service import ProxyService
 
@@ -207,9 +208,22 @@ async def save_provider_key(provider: str, request: Request):
     if error_response is not None:
         return error_response
     api_key = str(payload.get('api_key', '')).strip()
+    meta = PROVIDER_MAP.get(provider)
+    svc = get_service()
+    if meta is not None and meta.account_id_env:
+        raw_account = payload.get('account_id', '')
+        account_id = raw_account if isinstance(raw_account, str) else ''
+        if not api_key or not is_valid_account_id(account_id):
+            return JSONResponse(
+                {'ok': False, 'error': 'cloudflare 需要 API Token 和 32 位十六进制 Account ID'},
+                status_code=400,
+            )
+        try:
+            return svc.save_provider_key(provider, api_key, account_id=account_id)
+        except ProviderError as exc:
+            return JSONResponse({'ok': False, 'error': str(exc)}, status_code=400)
     if not api_key:
         return JSONResponse({'ok': False, 'error': 'missing api_key'}, status_code=400)
-    svc = get_service()
     try:
         result = svc.save_provider_key(provider, api_key)
         return result

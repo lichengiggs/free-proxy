@@ -14,8 +14,10 @@ from unittest.mock import patch
 from fastapi.testclient import TestClient
 
 from python_scripts.cli import build_parser
+from python_scripts.provider_catalog import get_provider
 from python_scripts.service import OpenAIForwardResult, ProxyService
 from python_scripts.server_fastapi import _iter_chunks, app, get_service, _service
+from python_scripts.tests.test_service import FakeTransport as RecordingTransport
 
 
 @dataclass
@@ -232,6 +234,105 @@ class ServerApiTests(unittest.TestCase):
         resp = client.post('/api/provider-keys/openrouter', json={'api_key': ''})
         self.assertEqual(resp.status_code, 400)
         self.assertIn('missing api_key', str(resp.json()['error']))
+
+    def test_console_cloudflare_card_requires_api_token_and_account_id(self) -> None:
+        page = TestClient(app).get('/')
+        text = page.text
+        self.assertEqual(page.status_code, 200)
+        self.assertIn('Cloudflare Workers AI', text)
+        self.assertIn('requiresAccountId: true', text)
+        self.assertLess(text.index("id: 'cloudflare'"), text.index("id: 'amd'"))
+        self.assertIn('API Token', text)
+        self.assertIn('Account ID', text)
+        self.assertIn('Workers AI Read', text)
+        self.assertIn('Workers AI Edit', text)
+        self.assertIn('Get Account ID', text)
+        self.assertIn('https://developers.cloudflare.com/workers-ai/get-started/rest-api/', text)
+        self.assertIn('请同时填写 API Token 和 Account ID', text)
+        self.assertIn('account_id: accountId', text)
+        self.assertIn('id="account-${provider.id}"', text)
+
+    def test_cloudflare_save_returns_400_without_writing_env_or_calling_upstream(self) -> None:
+        account_id = '0123456789abcDEF0123456789abcDEF'
+        token = 'cf-token-example-1234'
+        keys = ('CLOUDFLARE_API_KEY', 'CLOUDFLARE_ACCOUNT_ID', 'FREE_PROXY_TEST_UPSTREAM', 'GROQ_API_KEY')
+        old = {key: os.environ.get(key) for key in keys}
+        for key in keys:
+            os.environ.pop(key, None)
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                env_path = Path(tmp) / '.env'
+                env_path.write_text('GROQ_API_KEY=keep-me\n', encoding='utf-8')
+                transport = RecordingTransport()
+                import python_scripts.server_fastapi as sf
+                sf._service = ProxyService(
+                    transport=transport,
+                    dotenv_path=env_path,
+                    health_path=Path(tmp) / 'health.json',
+                    preferred_model_path=Path(tmp) / 'preferred.json',
+                    token_limit_path=Path(tmp) / 'limits.json',
+                )
+                client = TestClient(app)
+                rejected = [
+                    {'api_key': token},
+                    {'account_id': account_id},
+                    {'api_key': token, 'account_id': ''},
+                    {'api_key': token, 'account_id': ' '},
+                    {'api_key': token, 'account_id': 'a' * 31},
+                    {'api_key': token, 'account_id': 'abcd/ef0123456789abcdef01234567'},
+                    {'api_key': token, 'account_id': '..abcdef0123456789abcdef0123456789'},
+                    {'api_key': token, 'account_id': '0123456789abcdef 123456789abcdef'},
+                    {'api_key': '', 'account_id': account_id},
+                ]
+                for payload in rejected:
+                    with self.subTest(payload=payload):
+                        resp = client.post('/api/provider-keys/cloudflare', json=payload)
+                        self.assertEqual(resp.status_code, 400)
+                text = env_path.read_text(encoding='utf-8')
+                self.assertNotIn('CLOUDFLARE_API_KEY', text)
+                self.assertNotIn('CLOUDFLARE_ACCOUNT_ID', text)
+                self.assertNotIn(token, text)
+                self.assertNotIn(account_id, text)
+                self.assertIn('GROQ_API_KEY=keep-me', text)
+                self.assertEqual(transport.calls, [])
+                self.assertIsNone(os.environ.get('CLOUDFLARE_API_KEY'))
+                self.assertIsNone(os.environ.get('CLOUDFLARE_ACCOUNT_ID'))
+
+                saved = client.post('/api/provider-keys/cloudflare', json={'api_key': token, 'account_id': account_id})
+                self.assertEqual(saved.status_code, 200)
+                body = json.dumps(saved.json())
+                self.assertNotIn(token, body)
+                self.assertNotIn(account_id, body)
+                self.assertIn('***', body)
+                status = client.get('/api/provider-keys').json()['cloudflare']
+                status_text = json.dumps(status)
+                self.assertTrue(status['configured'])
+                self.assertEqual(status['account_id_env'], 'CLOUDFLARE_ACCOUNT_ID')
+                self.assertEqual(status['env'], 'CLOUDFLARE_API_KEY')
+                self.assertNotIn(token, status_text)
+                self.assertNotIn(account_id, status_text)
+                self.assertEqual(transport.calls, [])
+                self.assertEqual(
+                    get_provider('cloudflare').base_url,
+                    f'https://api.cloudflare.com/client/v4/accounts/{account_id}/ai/v1',
+                )
+
+                ignored = client.post(
+                    '/api/provider-keys/groq',
+                    json={'api_key': 'groq-example-123456', 'account_id': '../not-an-account'},
+                )
+                self.assertEqual(ignored.status_code, 200)
+                groq_text = env_path.read_text(encoding='utf-8')
+                self.assertIn('GROQ_API_KEY=groq-example-123456', groq_text)
+                self.assertNotIn('../not-an-account', groq_text)
+                self.assertNotIn('account_id', client.get('/api/provider-keys').json()['groq'])
+                self.assertEqual(transport.calls, [])
+        finally:
+            for key, value in old.items():
+                if value is None:
+                    os.environ.pop(key, None)
+                else:
+                    os.environ[key] = value
 
     def test_openai_chat_completion_accepts_model_with_provider_prefix(self) -> None:
         client = TestClient(app)

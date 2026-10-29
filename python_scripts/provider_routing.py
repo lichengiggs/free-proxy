@@ -4,7 +4,7 @@ import time
 from dataclasses import dataclass
 from typing import Literal
 
-from .provider_catalog import get_provider_model_hints
+from .provider_catalog import CLOUDFLARE_PAID_MODEL_IDS, get_provider_model_hints
 
 
 AliasName = Literal['auto']
@@ -121,6 +121,8 @@ def _latest_successful_model(
         model_id = key[len(prefix):]
         if not model_id:
             continue
+        if provider == 'cloudflare' and model_id in CLOUDFLARE_PAID_MODEL_IDS:
+            continue
         if candidate_in_cooldown(health, provider, model_id, now_ts, current_key_hash):
             continue
         if best_at is None or checked_at >= best_at:
@@ -171,6 +173,13 @@ def _select_sambanova(models: list[str]) -> str | None:
     return models[0] if models else None
 
 
+def _select_cloudflare(models: list[str]) -> str | None:
+    for model in models:
+        if model not in CLOUDFLARE_PAID_MODEL_IDS:
+            return model
+    return None
+
+
 def select_listed_model(provider: str, models: list[str]) -> str | None:
     """Pick one refreshed auto candidate from an already filtered model list.
 
@@ -180,7 +189,9 @@ def select_listed_model(provider: str, models: list[str]) -> str | None:
 
     Returns:
         The model to insert after a remembered success, or None when this list
-        should not contribute a candidate.
+        should not contribute a candidate. Cloudflare skips the paid model ids
+        and returns None when every remaining id is paid, so the caller uses
+        the single hint.
 
     Raises:
         None.
@@ -194,6 +205,8 @@ def select_listed_model(provider: str, models: list[str]) -> str | None:
         return _select_groq(cleaned)
     if provider == 'sambanova':
         return _select_sambanova(cleaned)
+    if provider == 'cloudflare':
+        return _select_cloudflare(cleaned)
     return cleaned[0] if cleaned else None
 
 
@@ -288,7 +301,7 @@ def build_auto_candidates(
     Returns:
         Candidates in attempt order. Each configured provider contributes its latest
         uncooled success, then one refreshed model when that model differs, otherwise
-        its single hint.
+        its single hint. Cloudflare never contributes one of the paid model ids.
 
     Raises:
         KeyError: A configured provider is missing from the catalog when its hint is needed.
@@ -299,6 +312,8 @@ def build_auto_candidates(
     hashes = key_hashes or {}
 
     def push(provider: str, model: str, source: CandidateSource) -> None:
+        if provider == 'cloudflare' and model in CLOUDFLARE_PAID_MODEL_IDS:
+            return
         key = (provider, model)
         if provider not in configured or key in seen:
             return
