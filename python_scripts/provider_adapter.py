@@ -1,20 +1,34 @@
 from __future__ import annotations
 
 import json
+import re
 import time
 from dataclasses import dataclass
 from collections.abc import Callable, Iterable
 
 from .errors import classify_error
-from .provider_catalog import ProviderMeta, get_model_capabilities, get_provider_model_hints, get_provider_required_query
+from .provider_catalog import CLOUDFLARE_PAID_MODEL_IDS, ProviderMeta, get_model_capabilities, get_provider_model_hints, get_provider_required_query
 from .provider_errors import ProviderError, ProviderHTTPError
 from .provider_transport import Transport, UrlLibTransport, build_url
 from .response_normalizer import sanitize_model_text
 from .request_limiter import RequestLimiterGate
 
 JsonObject = dict[str, object]
-_HINT_FALLBACK_PROVIDERS = frozenset({'groq', 'nvidia', 'amd'})
+_HINT_FALLBACK_PROVIDERS = frozenset({'groq', 'nvidia', 'amd', 'cloudflare'})
 _AMD_NON_CHAT_MODEL_IDS = frozenset({'MinerU2.5-Pro', 'OmniVoice', 'Clef', 'd3', 'd3-flash'})
+_CLOUDFLARE_NON_CHAT_ID_MARKERS = (
+    'embedding',
+    'rerank',
+    'whisper',
+    'audio',
+    'speech',
+    'image',
+    'diffusion',
+    'flux',
+    'vision',
+    'bge-',
+)
+_UUID_RE = re.compile(r'^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$')
 
 
 @dataclass(frozen=True)
@@ -68,6 +82,12 @@ class ProviderAdapter:
             return
         self.request_limiter.acquire()
 
+    def _block_unresolved_cloudflare_http(self) -> None:
+        if '{account_id}' not in self.provider.base_url:
+            return
+        if isinstance(self.transport, UrlLibTransport):
+            raise ProviderError('cloudflare Account ID 缺失或非法，未向 api.cloudflare.com 发出请求')
+
     def _headers(self) -> dict[str, str]:
         if self.provider.format == 'gemini':
             return {
@@ -87,6 +107,7 @@ class ProviderAdapter:
         query: dict[str, str] | None = None,
         timeout: int | None = None,
     ) -> tuple[int, dict[str, str], object]:
+        self._block_unresolved_cloudflare_http()
         raw_body = json.dumps(payload, ensure_ascii=False).encode('utf-8') if payload is not None else None
         timeout_value = timeout if timeout is not None else self._request_timeout_seconds_for_path(path)
         if self.debug_log is not None:
@@ -140,6 +161,7 @@ class ProviderAdapter:
         query: dict[str, str] | None = None,
         timeout: int | None = None,
     ) -> tuple[int, dict[str, str], Iterable[bytes]]:
+        self._block_unresolved_cloudflare_http()
         raw_body = json.dumps(payload, ensure_ascii=False).encode('utf-8') if payload is not None else None
         timeout_value = timeout if timeout is not None else self.request_timeout_seconds
         if self.debug_log is not None:
@@ -201,6 +223,8 @@ class ProviderAdapter:
                 continue
             if self.provider.name == 'amd' and raw_model_id in _AMD_NON_CHAT_MODEL_IDS:
                 continue
+            if self.provider.name == 'cloudflare' and not self._is_cloudflare_chat_model(item, raw_model_id.strip()):
+                continue
             ids.append(self.normalize_model_id(raw_model_id))
         if ids:
             return ids
@@ -214,6 +238,7 @@ class ProviderAdapter:
     def chat_completions_raw(self, payload: JsonObject) -> tuple[int, dict[str, str], bytes]:
         if self.provider.format != 'openai':
             raise ProviderError('provider is not openai-compatible')
+        self._block_unresolved_cloudflare_http()
         body = json.dumps(payload, ensure_ascii=False).encode('utf-8')
         model_value = payload.get('model')
         timeout = self._request_timeout_seconds_for_model(model_value) if isinstance(model_value, str) else self.request_timeout_seconds
@@ -257,6 +282,7 @@ class ProviderAdapter:
     def chat_completions_stream(self, payload: JsonObject) -> tuple[int, dict[str, str], Iterable[bytes]]:
         if self.provider.format != 'openai':
             raise ProviderError('provider is not openai-compatible')
+        self._block_unresolved_cloudflare_http()
         body = json.dumps(payload, ensure_ascii=False).encode('utf-8')
         model_value = payload.get('model')
         timeout = self._request_timeout_seconds_for_model(model_value) if isinstance(model_value, str) else self.request_timeout_seconds
@@ -414,6 +440,57 @@ class ProviderAdapter:
     @staticmethod
     def _has_model_items(data: object) -> bool:
         return bool(ProviderAdapter._extract_model_items(data))
+
+    @staticmethod
+    def _cloudflare_task_label(item: JsonObject) -> str | None:
+        for key in ('task', 'task_type', 'task_name'):
+            label = ProviderAdapter._label_from_task_value(item.get(key))
+            if label:
+                return label
+        metadata = item.get('metadata')
+        if isinstance(metadata, dict):
+            for key in ('task', 'task_type'):
+                label = ProviderAdapter._label_from_task_value(metadata.get(key))
+                if label:
+                    return label
+        return None
+
+    @staticmethod
+    def _label_from_task_value(value: object) -> str | None:
+        if isinstance(value, str):
+            text = value.strip()
+            if not text or text.lower() == 'model':
+                return None
+            return text
+        if not isinstance(value, dict):
+            return None
+        for key in ('name', 'type'):
+            nested = value.get(key)
+            if isinstance(nested, str) and nested.strip():
+                return nested.strip()
+        raw_id = value.get('id')
+        if isinstance(raw_id, str):
+            text = raw_id.strip()
+            if text and _UUID_RE.fullmatch(text) is None and any(char.isalpha() for char in text):
+                return text
+        return None
+
+    @staticmethod
+    def _is_text_generation_or_chat(task: str) -> bool:
+        compact = ' '.join(task.lower().replace('_', ' ').replace('-', ' ').replace('/', ' ').split())
+        if compact == 'chat' or compact.startswith('chat ') or compact.endswith(' chat'):
+            return True
+        return 'text generation' in compact
+
+    @staticmethod
+    def _is_cloudflare_chat_model(item: JsonObject, model_id: str) -> bool:
+        if model_id in CLOUDFLARE_PAID_MODEL_IDS:
+            return False
+        task = ProviderAdapter._cloudflare_task_label(item)
+        if task is not None:
+            return ProviderAdapter._is_text_generation_or_chat(task)
+        lowered = model_id.lower()
+        return not any(marker in lowered for marker in _CLOUDFLARE_NON_CHAT_ID_MARKERS)
 
     @staticmethod
     def _is_openrouter_free_model(item: JsonObject, model_id: str) -> bool:

@@ -26,6 +26,7 @@
 - 文件：`python_scripts/provider_catalog.py`
 - 职责：provider 名称、base URL、API key 环境变量、协议格式、模型 hints、required query
 - 约束：这里只存事实，不存 fallback 策略
+- Cloudflare 的 base URL 由 `CLOUDFLARE_ACCOUNT_ID` 填进模板，已配置条件是 token 和合法 Account ID 同时存在。
 
 ### 3.2 Provider Routing
 
@@ -44,7 +45,7 @@
   - 统一 HTTP 传输
   - 处理 OpenAI / Gemini 协议差异
   - 保留 OpenRouter 免费模型过滤、Gemini 文本模型过滤
-  - Groq / NVIDIA / AMD 在 `/models` 失败或返回空列表时回退那一个 `model_hints`
+  - Groq / NVIDIA / AMD / Cloudflare 在 `/models` 失败或返回空列表时回退那一个 `model_hints`
 
 ### 3.4 Service
 

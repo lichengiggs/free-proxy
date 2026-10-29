@@ -9,6 +9,7 @@
 - console no longer provides OpenClaw configuration
 
 ### Added
+- Cloudflare Workers AI 需要 API Token 和 Account ID
 - `requested_model` support for internal routing preference
 - health-driven candidate pool for `auto`
 - unified JSON/SSE response normalization

@@ -213,6 +213,21 @@
             margin-top: 10px;
         }
 
+        .provider-actions.with-account {
+            grid-template-columns: 1fr;
+        }
+
+        .field-label {
+            font-size: 12px;
+            color: var(--muted);
+        }
+
+        .save-row {
+            display: flex;
+            gap: 8px;
+            flex-wrap: wrap;
+        }
+
         .masked {
             min-height: 40px;
             padding: 10px 12px;
@@ -701,6 +716,16 @@ opencode run -m free-proxy/auto "Reply with exactly OK"</pre>
             { id: 'gemini', name: 'Gemini', tier: '免费', tierClass: 'free', placeholder: 'gemini key', keyUrl: 'https://aistudio.google.com/app/apikey' },
             { id: 'mistral', name: 'Mistral', tier: '免费', tierClass: 'free', placeholder: 'mist-...', keyUrl: 'https://console.mistral.ai/api-keys' },
             { id: 'nvidia', name: 'NVIDIA NIM', tier: '免费', tierClass: 'free', placeholder: 'nvapi-...', keyUrl: 'https://build.nvidia.com/' },
+            {
+                id: 'cloudflare',
+                name: 'Cloudflare Workers AI',
+                tier: '免费',
+                tierClass: 'free',
+                placeholder: 'API Token',
+                accountPlaceholder: 'Account ID',
+                requiresAccountId: true,
+                keyUrl: 'https://developers.cloudflare.com/workers-ai/get-started/rest-api/',
+            },
             { id: 'amd', name: 'AMD Token Factory', tier: '免费', tierClass: 'free', placeholder: 'rc-...', keyUrl: 'https://developer.amd.com.cn/radeon/tokenfactory' },
         ];
 
@@ -891,6 +916,35 @@ opencode run -m free-proxy/auto "Reply with exactly OK"</pre>
             diagnosticsBox.textContent = lines.join('\n');
         }
 
+        function providerHelpHtml(provider) {
+            const link = `<a href="${provider.keyUrl}" target="_blank" rel="noreferrer">${provider.keyUrl.replace('https://', '')}</a>`;
+            if (provider.requiresAccountId) {
+                return `API Token 需要 Workers AI Read 和 Workers AI Edit 权限，可从 Workers AI 页的 Use REST API 创建。Account ID 从同一页的 Get Account ID 复制，是 32 位十六进制。文档：${link}`;
+            }
+            return `Key 获取：${link}`;
+        }
+
+        function providerEditorFields(provider) {
+            if (!provider.requiresAccountId) {
+                return `<input class="field" id="key-${provider.id}" type="password" autocomplete="off" placeholder="${provider.placeholder}">`;
+            }
+            return `
+                <label class="field-label" for="key-${provider.id}">API Token</label>
+                <input class="field" id="key-${provider.id}" type="password" autocomplete="off" placeholder="${provider.placeholder}">
+                <label class="field-label" for="account-${provider.id}">Account ID</label>
+                <input class="field" id="account-${provider.id}" type="text" autocomplete="off" spellcheck="false" placeholder="${provider.accountPlaceholder}">
+            `;
+        }
+
+        function maskedCredentialText(provider, status) {
+            if (!provider.requiresAccountId) {
+                return escapeHtml(status.masked || '已配置');
+            }
+            const token = escapeHtml(status.masked || '已配置');
+            const account = status.account_id_masked ? ` · Account ID ${escapeHtml(status.account_id_masked)}` : '';
+            return `API Token ${token}${account}`;
+        }
+
         function renderProviderCards() {
             providerGrid.innerHTML = PROVIDERS.map((provider) => {
                 const status = state.statuses[provider.id] || { configured: false, masked: '' };
@@ -902,6 +956,10 @@ opencode run -m free-proxy/auto "Reply with exactly OK"</pre>
                         ? `最近验证成功：${verify.verified_model || '已通过真实请求验证'}`
                         : `最近验证失败：${verify.error || '未知错误'}${verify.suggestion ? `\n建议：${verify.suggestion}` : ''}`
                     : '';
+                const saveButtons = `
+                    <button class="btn btn-primary" data-action="save" data-provider="${provider.id}">保存</button>
+                    ${status.configured ? `<button class="btn btn-ghost" data-action="cancel-edit" data-provider="${provider.id}">取消</button>` : `<button class="btn btn-ghost" data-action="verify" data-provider="${provider.id}" disabled>验证</button>`}
+                `;
 
                 return `
                     <div class="provider-card ${status.configured ? 'configured' : ''}">
@@ -911,19 +969,18 @@ opencode run -m free-proxy/auto "Reply with exactly OK"</pre>
                                     <span class="provider-name">${provider.name}</span>
                                     <span class="badge ${provider.tierClass}">${provider.tier}</span>
                                 </div>
-                                <div class="provider-help">Key 获取：<a href="${provider.keyUrl}" target="_blank" rel="noreferrer">${provider.keyUrl.replace('https://', '')}</a></div>
+                                <div class="provider-help">${providerHelpHtml(provider)}</div>
                             </div>
                             <div class="provider-state ${status.configured ? 'ok' : ''}">${stateLabel}</div>
                         </div>
 
                         ${isEditing ? `
-                            <div class="provider-actions">
-                                <input class="field" id="key-${provider.id}" type="password" autocomplete="off" placeholder="${provider.placeholder}">
-                                <button class="btn btn-primary" data-action="save" data-provider="${provider.id}">保存</button>
-                                ${status.configured ? `<button class="btn btn-ghost" data-action="cancel-edit" data-provider="${provider.id}">取消</button>` : `<button class="btn btn-ghost" data-action="verify" data-provider="${provider.id}" ${status.configured ? '' : 'disabled'}>验证</button>`}
+                            <div class="provider-actions ${provider.requiresAccountId ? 'with-account' : ''}">
+                                ${providerEditorFields(provider)}
+                                ${provider.requiresAccountId ? `<div class="save-row">${saveButtons}</div>` : saveButtons}
                             </div>
                         ` : `
-                            <div class="masked mono">${escapeHtml(status.masked || '已配置')}</div>
+                            <div class="masked mono">${maskedCredentialText(provider, status)}</div>
                             <div class="provider-actions">
                                 <button class="btn btn-secondary" data-action="verify" data-provider="${provider.id}">验证</button>
                                 <button class="btn btn-ghost" data-action="edit" data-provider="${provider.id}">修改</button>
@@ -1157,9 +1214,23 @@ opencode run -m free-proxy/auto "Reply with exactly OK"</pre>
         }
 
         async function saveProviderKey(providerId, button) {
+            const provider = PROVIDERS.find((item) => item.id === providerId);
             const input = document.getElementById(`key-${providerId}`);
             const apiKey = (input && input.value || '').trim();
-            if (!apiKey) {
+            const accountInput = provider && provider.requiresAccountId ? document.getElementById(`account-${providerId}`) : null;
+            const accountId = accountInput ? String(accountInput.value || '').trim() : '';
+            let payload = { api_key: apiKey };
+            if (provider && provider.requiresAccountId) {
+                if (!apiKey || !accountId) {
+                    showToast('请同时填写 API Token 和 Account ID', 'error');
+                    return;
+                }
+                if (!/^[0-9a-fA-F]{32}$/.test(accountId)) {
+                    showToast('Account ID 必须是 32 位十六进制', 'error');
+                    return;
+                }
+                payload = { api_key: apiKey, account_id: accountId };
+            } else if (!apiKey) {
                 showToast('请输入 API Key', 'error');
                 return;
             }
@@ -1170,7 +1241,7 @@ opencode run -m free-proxy/auto "Reply with exactly OK"</pre>
                 const data = await requestJson(`/api/provider-keys/${providerId}`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ api_key: apiKey }),
+                    body: JSON.stringify(payload),
                 });
                 state.editing[providerId] = false;
                 await loadStatuses();

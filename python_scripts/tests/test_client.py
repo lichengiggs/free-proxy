@@ -4,6 +4,7 @@ import json
 import threading
 import time
 import unittest
+from dataclasses import replace
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from unittest.mock import patch
 from urllib.parse import parse_qs, urlsplit
@@ -747,3 +748,98 @@ class ClientTests(unittest.TestCase):
 
     def test_list_providers_matches_catalog(self) -> None:
         self.assertTrue(any(item.name == 'openrouter' for item in list_providers()))
+
+    def _cloudflare_provider(self, account_id: str | None = None):
+        catalog = next(item for item in list_providers() if item.name == 'cloudflare')
+        if account_id is None:
+            return catalog
+        return replace(catalog, base_url=f'https://api.cloudflare.com/client/v4/accounts/{account_id}/ai/v1')
+
+    def test_cloudflare_models_skip_paid_and_non_chat_entries(self) -> None:
+        account_id = '0123456789abcDEF0123456789abcDEF'
+        provider = self._cloudflare_provider(account_id)
+        paid = [
+            '@cf/moonshotai/kimi-k2.6',
+            '@cf/moonshotai/kimi-k2.7-code',
+            '@cf/zai-org/glm-5.2',
+            '@cf/zai-org/glm-5.3',
+            '@cf/zai-org/glm-5.3-flash',
+            '@cf/deepseek-ai/deepseek-v4-flash-0731',
+            '@cf/deepseek-ai/deepseek-v4.1-flash-1017',
+            '@cf/deepseek-ai/deepseek-v4-pro-0813',
+        ]
+        transport = FakeTransport({
+            ('GET', f'{provider.base_url}/models'): (
+                200,
+                {},
+                json.dumps({
+                    'data': [
+                        {'id': '@cf/meta/llama-3.1-8b-instruct', 'task': {'name': 'Text Generation'}},
+                        {'id': '@cf/meta/llama-3.2-3b-instruct'},
+                        {'id': '@cf/example/plain-model', 'task': {'name': 'Text Embeddings'}},
+                        {'id': '@cf/example/picture-model', 'task': {'name': 'Text-to-Image'}},
+                        {'id': '@cf/example/sound-model', 'task': {'name': 'Automatic Speech Recognition'}},
+                        {'id': '@cf/example/rank-model', 'task': {'name': 'Rerank'}},
+                        {'id': '@cf/example/translate-model', 'task': 'Translation'},
+                        {'id': '@cf/baai/bge-base-en-v1.5'},
+                        {'id': '@cf/openai/whisper-tiny'},
+                        {'id': '@cf/stabilityai/stable-diffusion-xl-base-1.0'},
+                        {'id': '@cf/baai/bge-reranker-base'},
+                        *[{'id': model_id, 'task': {'name': 'Text Generation'}} for model_id in paid],
+                    ],
+                }).encode(),
+            ),
+            ('POST', f'{provider.base_url}/chat/completions'): (
+                200,
+                {},
+                json.dumps({'choices': [{'message': {'content': 'ok'}}]}).encode(),
+            ),
+        })
+        adapter = ProviderAdapter(provider=provider, api_key='cf-token-example-1234', transport=transport)
+        self.assertEqual(
+            adapter.list_models(),
+            ['@cf/meta/llama-3.1-8b-instruct', '@cf/meta/llama-3.2-3b-instruct'],
+        )
+        for model_id in paid:
+            self.assertNotIn(model_id, adapter.list_models())
+        self.assertEqual(adapter.chat_text('@cf/meta/llama-3.1-8b-instruct', 'ok'), 'ok')
+        urls = [url for _method, url, _headers, _body, _timeout in transport.requests]
+        self.assertTrue(any(url.endswith('/models') for url in urls))
+        self.assertTrue(any(url.endswith('/chat/completions') for url in urls))
+        self.assertTrue(all('/ai/run/' not in url for url in urls))
+        self.assertTrue(all('{account_id}' not in url for url in urls))
+        self.assertIn(account_id, urls[0])
+        _method, _url, headers, _body, _timeout = transport.requests[0]
+        self.assertEqual(headers['Authorization'], 'Bearer cf-token-example-1234')
+
+    def test_cloudflare_model_list_failure_falls_back_to_llama_hint(self) -> None:
+        account_id = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
+        provider = self._cloudflare_provider(account_id)
+        transport = FakeTransport({
+            ('GET', f'{provider.base_url}/models'): (404, {}, b'not found'),
+        })
+        adapter = ProviderAdapter(provider=provider, api_key='cf-token-example-1234', transport=transport)
+        self.assertEqual(adapter.list_models(), ['@cf/meta/llama-3.1-8b-instruct'])
+
+        filtered = FakeTransport({
+            ('GET', f'{provider.base_url}/models'): (
+                200,
+                {},
+                json.dumps({'data': [{'id': '@cf/moonshotai/kimi-k2.6'}, {'id': '@cf/baai/bge-base-en-v1.5'}]}).encode(),
+            ),
+        })
+        filtered_adapter = ProviderAdapter(provider=provider, api_key='cf-token-example-1234', transport=filtered)
+        self.assertEqual(filtered_adapter.list_models(), ['@cf/meta/llama-3.1-8b-instruct'])
+
+    def test_invalid_cloudflare_account_id_does_not_call_cloudflare(self) -> None:
+        provider = self._cloudflare_provider()
+        self.assertIn('{account_id}', provider.base_url)
+        adapter = ProviderAdapter(provider=provider, api_key='cf-token-example-1234', transport=UrlLibTransport())
+        with patch('python_scripts.provider_transport.httpx.Client') as client_cls:
+            with self.assertRaises(ProviderError) as caught:
+                adapter.list_models()
+            self.assertIn('api.cloudflare.com', str(caught.exception))
+            client_cls.assert_not_called()
+            with self.assertRaises(ProviderError):
+                adapter.chat_text('@cf/meta/llama-3.1-8b-instruct', 'ok')
+            client_cls.assert_not_called()

@@ -376,6 +376,9 @@ class ServiceTests(unittest.TestCase):
             'OPENROUTER_API_KEY',
             'LONGCAT_API_KEY',
             'GEMINI_API_KEY',
+            'CLOUDFLARE_API_KEY',
+            'CLOUDFLARE_ACCOUNT_ID',
+            'FREE_PROXY_TEST_UPSTREAM',
         ]
         self.old_values = {key: os.environ.get(key) for key in self.env_keys}
         os.environ['OPENROUTER_API_KEY'] = 'test'
@@ -477,7 +480,88 @@ class ServiceTests(unittest.TestCase):
             self.assertIn('***', after['openrouter']['masked'])
             self.assertTrue(after['groq']['configured'])
             self.assertEqual(after['groq']['env'], 'GROQ_API_KEY')
+            self.assertEqual(set(after['groq']), {'configured', 'masked', 'env'})
             self.assertNotIn('longcat', after)
+
+    def test_cloudflare_save_rejects_bad_account_id_without_writing_env_or_calling_upstream(self) -> None:
+        account_id = '0123456789abcDEF0123456789abcDEF'
+        token = 'cf-token-example-1234'
+        os.environ.pop('CLOUDFLARE_API_KEY', None)
+        os.environ.pop('CLOUDFLARE_ACCOUNT_ID', None)
+        os.environ.pop('FREE_PROXY_TEST_UPSTREAM', None)
+        with tempfile.TemporaryDirectory() as tmp:
+            env_path = Path(tmp) / '.env'
+            env_path.write_text('GROQ_API_KEY=keep-me\n', encoding='utf-8')
+            transport = FakeTransport()
+            service = self.make_service(transport, dotenv_path=env_path)
+            rejected = [
+                {'api_key': token, 'account_id': ''},
+                {'api_key': token, 'account_id': 'a' * 31},
+                {'api_key': token, 'account_id': 'a' * 16 + '/' + 'b' * 15},
+                {'api_key': token, 'account_id': '..' + 'ab' * 15},
+                {'api_key': token, 'account_id': '0123456789abcdef 123456789abcdef'},
+                {'api_key': '', 'account_id': account_id},
+                {'api_key': token},
+            ]
+            for fields in rejected:
+                with self.subTest(fields=fields):
+                    with self.assertRaises(ProviderError):
+                        service.save_provider_key('cloudflare', fields.get('api_key', ''), account_id=fields.get('account_id'))
+            text = env_path.read_text(encoding='utf-8')
+            self.assertNotIn('CLOUDFLARE_API_KEY', text)
+            self.assertNotIn('CLOUDFLARE_ACCOUNT_ID', text)
+            self.assertNotIn(token, text)
+            self.assertIn('GROQ_API_KEY=keep-me', text)
+            self.assertEqual(transport.calls, [])
+            with self.assertRaises(ProviderError):
+                service.list_models('cloudflare')
+            self.assertEqual(transport.calls, [])
+            self.assertTrue(all('api.cloudflare.com' not in url for _method, url in transport.calls))
+
+    def test_other_provider_save_ignores_account_id(self) -> None:
+        os.environ.pop('CLOUDFLARE_API_KEY', None)
+        os.environ.pop('CLOUDFLARE_ACCOUNT_ID', None)
+        with tempfile.TemporaryDirectory() as tmp:
+            env_path = Path(tmp) / '.env'
+            service = self.make_service(FakeTransport(), dotenv_path=env_path)
+            service.save_provider_key('groq', 'groq-example-123456', account_id='../not-an-account')
+            text = env_path.read_text(encoding='utf-8')
+            self.assertIn('GROQ_API_KEY=groq-example-123456', text)
+            self.assertNotIn('CLOUDFLARE_API_KEY', text)
+            self.assertNotIn('CLOUDFLARE_ACCOUNT_ID', text)
+            self.assertNotIn('../not-an-account', text)
+            status = service.provider_key_statuses()['groq']
+            self.assertTrue(status['configured'])
+            self.assertNotIn('account_id', status)
+
+    def test_cloudflare_status_masks_token_and_account_id(self) -> None:
+        account_id = '0123456789abcDEF0123456789abcDEF'
+        token = 'cf-token-example-1234'
+        os.environ.pop('FREE_PROXY_TEST_UPSTREAM', None)
+        with tempfile.TemporaryDirectory() as tmp:
+            env_path = Path(tmp) / '.env'
+            transport = FakeTransport()
+            service = self.make_service(transport, dotenv_path=env_path)
+            before = service.provider_key_statuses()['cloudflare']
+            self.assertFalse(before['configured'])
+            self.assertEqual(before['account_id_env'], 'CLOUDFLARE_ACCOUNT_ID')
+            self.assertEqual(before['env'], 'CLOUDFLARE_API_KEY')
+            saved = service.save_provider_key('cloudflare', token, account_id=account_id)
+            encoded = json.dumps(saved)
+            self.assertNotIn(token, encoded)
+            self.assertNotIn(account_id, encoded)
+            self.assertIn('***', str(saved['masked']))
+            self.assertIn('***', str(saved['account_id_masked']))
+            status = service.provider_key_statuses()['cloudflare']
+            self.assertTrue(status['configured'])
+            status_text = json.dumps(status)
+            self.assertNotIn(token, status_text)
+            self.assertNotIn(account_id, status_text)
+            self.assertEqual(status['account_id_env'], 'CLOUDFLARE_ACCOUNT_ID')
+            service.list_models('cloudflare')
+            self.assertTrue(transport.calls)
+            self.assertTrue(all(account_id in url and '{account_id}' not in url for _method, url in transport.calls))
+            self.assertTrue(all(url.startswith('https://api.cloudflare.com/client/v4/accounts/') for _method, url in transport.calls))
 
     def test_save_and_load_preferred_model(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
