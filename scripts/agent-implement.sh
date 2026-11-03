@@ -79,6 +79,25 @@ fi
 WORKDIR=$(mktemp -d "${TMPDIR:-/tmp}/agent-implement.XXXXXX")
 STATE_FILE=$(agent_pipeline_state_file "$ISSUE")
 STARTED=0
+INTERRUPTED=0
+
+# Ctrl-C、关终端、外部 kill 不算崩溃。把状态退回可重入，下一轮接着做。
+cleanup_interrupted() {
+  local rc="$1"
+  local branch next
+  branch=$(agent_pipeline_state_get "$STATE_FILE" branch || true)
+  if [[ -n "$branch" ]] && agent_pipeline_branch_exists_local "$branch"; then
+    next=$(agent_pipeline_interrupt_state 1)
+  else
+    next=$(agent_pipeline_interrupt_state 0)
+  fi
+  agent_pipeline_state_put "$STATE_FILE" status "$next" || true
+  agent_pipeline_state_put "$STATE_FILE" reason interrupted || true
+  agent_pipeline_state_put "$STATE_FILE" owner_pid "" || true
+  agent_pipeline_comment_once issue "$ISSUE" \
+    "<!-- agent-pipeline:notice=interrupted -->" \
+    "实现进程被中断（退出码 ${rc}）。下一轮会自动接着做，不需要手动清理状态。" || true
+}
 
 cleanup() {
   local rc=$?
@@ -86,16 +105,26 @@ cleanup() {
   if [[ "$STARTED" -eq 1 && "$rc" -ne 0 && -n "$STATE_FILE" ]]; then
     cur=$(agent_pipeline_state_get "$STATE_FILE" status || true)
     if [[ "$cur" == "implementing" ]]; then
-      agent_pipeline_state_put "$STATE_FILE" status stopped || true
-      agent_pipeline_state_put "$STATE_FILE" reason crashed || true
-      agent_pipeline_state_put "$STATE_FILE" owner_pid "" || true
-      agent_pipeline_comment_once issue "$ISSUE" \
-        "<!-- agent-pipeline:notice=crashed -->" \
-        "实现进程异常退出（退出码 ${rc}）。流水线停止。删掉 .agent-pipeline/issues/${ISSUE} 才会再试。" || true
+      if [[ "$INTERRUPTED" -eq 1 ]]; then
+        cleanup_interrupted "$rc"
+      else
+        agent_pipeline_state_put "$STATE_FILE" status stopped || true
+        agent_pipeline_state_put "$STATE_FILE" reason crashed || true
+        agent_pipeline_state_put "$STATE_FILE" owner_pid "" || true
+        agent_pipeline_comment_once issue "$ISSUE" \
+          "<!-- agent-pipeline:notice=crashed -->" \
+          "实现进程异常退出（退出码 ${rc}）。流水线停止。删掉 .agent-pipeline/issues/${ISSUE} 才会再试。" || true
+      fi
     fi
   fi
   rm -rf "$WORKDIR"
 }
+
+on_signal() {
+  INTERRUPTED=1
+  exit 130
+}
+trap on_signal INT TERM HUP
 trap cleanup EXIT
 
 stop_issue() {

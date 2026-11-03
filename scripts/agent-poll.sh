@@ -100,6 +100,11 @@ if [[ "$DRY" -eq 0 ]]; then
   LOCK_HELD=1
 fi
 
+# 只查一次。放进每轮循环会让一次瞬时失败打死整个轮询。
+if ! agent_pipeline_label_exists "ready"; then
+  agent_pipeline_die "标签 ready 不存在。本仓库应已有它（可以由agent接管开发的issues）。缺失时执行: gh label create ready --description \"可以由agent接管开发的issues\" --color 9d88c3"
+fi
+
 # 打印两行：流水线 PR 编号、人工 PR 编号。没有则为空行。
 classify_open_prs() {
   local issue="$1"
@@ -126,7 +131,11 @@ process_issue() {
 
   state_file=$(agent_pipeline_state_file "$issue")
   body_file=$(mktemp)
-  gh issue view "$issue" --json body --jq .body > "$body_file"
+  if ! gh issue view "$issue" --json body --jq .body > "$body_file"; then
+    rm -f "$body_file"
+    agent_pipeline_log "issue #$issue 正文拉取失败，跳过本轮"
+    return 0
+  fi
   body_sha=$(agent_pipeline_hash_file "$body_file")
   rm -f "$body_file"
 
@@ -190,8 +199,11 @@ process_issue() {
       if [[ "$DRY" -eq 1 ]]; then
         agent_pipeline_log "dry-run: 将认领流水线 PR #$pipeline_pr 给 issue #$issue"
       else
-        head_ref=$(gh pr view "$pipeline_pr" --json headRefName --jq .headRefName)
-        base_ref=$(gh pr view "$pipeline_pr" --json baseRefName --jq .baseRefName)
+        if ! head_ref=$(gh pr view "$pipeline_pr" --json headRefName --jq .headRefName) \
+          || ! base_ref=$(gh pr view "$pipeline_pr" --json baseRefName --jq .baseRefName); then
+          agent_pipeline_log "PR #$pipeline_pr 信息拉取失败，跳过本轮"
+          return 0
+        fi
         agent_pipeline_state_put "$state_file" status pr_open
         agent_pipeline_state_put "$state_file" pr "$pipeline_pr"
         agent_pipeline_state_put "$state_file" branch "$head_ref"
@@ -272,18 +284,21 @@ run_review() {
 }
 
 poll_once() {
-  if ! agent_pipeline_label_exists "ready"; then
-    agent_pipeline_die "标签 ready 不存在。本仓库应已有它（可以由agent接管开发的issues）。缺失时执行: gh label create ready --description \"可以由agent接管开发的issues\" --color 9d88c3"
-  fi
   local issues_raw sorted issue
-  issues_raw=$(gh issue list --label "ready" --state open --limit 50 --json number --jq '.[].number')
+  if ! issues_raw=$(gh issue list --label "ready" --state open --limit 50 --json number --jq '.[].number'); then
+    agent_pipeline_log "ready Issue 列表拉取失败，跳过本轮"
+    return 0
+  fi
   if [[ "$DRY" -eq 1 ]]; then
     PRS_JSON=$(mktemp)
   else
     mkdir -p "$AGENT_PIPELINE_STATE_DIR"
     PRS_JSON="$AGENT_PIPELINE_STATE_DIR/poll-prs.json"
   fi
-  agent_pipeline_fetch_open_prs_json "$PRS_JSON"
+  if ! agent_pipeline_fetch_open_prs_json "$PRS_JSON"; then
+    agent_pipeline_log "PR 列表拉取失败，跳过本轮"
+    return 0
+  fi
   sorted=$(printf '%s\n' "$issues_raw" | sed '/^$/d' | sort -n)
   while IFS= read -r issue; do
     [[ -n "$issue" ]] || continue

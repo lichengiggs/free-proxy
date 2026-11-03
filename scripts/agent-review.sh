@@ -77,8 +77,22 @@ fi
 
 WORKDIR=$(mktemp -d "${TMPDIR:-/tmp}/agent-review.XXXXXX")
 STARTED=0
+INTERRUPTED=0
 STATE_FILE=""
 ISSUE=""
+
+# Ctrl-C、关终端、外部 kill 不算崩溃。退回 pr_open，下一轮重新审查。
+cleanup_interrupted() {
+  local rc="$1"
+  agent_pipeline_state_put "$STATE_FILE" status pr_open || true
+  agent_pipeline_state_put "$STATE_FILE" reason interrupted || true
+  agent_pipeline_state_put "$STATE_FILE" owner_pid "" || true
+  if [[ -n "$PR" ]]; then
+    agent_pipeline_comment_once pr "$PR" \
+      "<!-- agent-pipeline:notice=interrupted -->" \
+      "审查进程被中断（退出码 ${rc}）。下一轮会重新审查，不需要手动清理状态。" || true
+  fi
+}
 
 cleanup() {
   local rc=$?
@@ -86,18 +100,28 @@ cleanup() {
   if [[ "$STARTED" -eq 1 && "$rc" -ne 0 && -n "$STATE_FILE" ]]; then
     cur=$(agent_pipeline_state_get "$STATE_FILE" status || true)
     if [[ "$cur" == "reviewing" ]]; then
-      agent_pipeline_state_put "$STATE_FILE" status stopped || true
-      agent_pipeline_state_put "$STATE_FILE" reason crashed || true
-      agent_pipeline_state_put "$STATE_FILE" owner_pid "" || true
-      if [[ -n "$PR" ]]; then
-        agent_pipeline_comment_once pr "$PR" \
-          "<!-- agent-pipeline:notice=crashed -->" \
-          "审查进程异常退出（退出码 ${rc}）。流水线停止。删掉 .agent-pipeline/issues/${ISSUE:-?} 才会再试。" || true
+      if [[ "$INTERRUPTED" -eq 1 ]]; then
+        cleanup_interrupted "$rc"
+      else
+        agent_pipeline_state_put "$STATE_FILE" status stopped || true
+        agent_pipeline_state_put "$STATE_FILE" reason crashed || true
+        agent_pipeline_state_put "$STATE_FILE" owner_pid "" || true
+        if [[ -n "$PR" ]]; then
+          agent_pipeline_comment_once pr "$PR" \
+            "<!-- agent-pipeline:notice=crashed -->" \
+            "审查进程异常退出（退出码 ${rc}）。流水线停止。删掉 .agent-pipeline/issues/${ISSUE:-?} 才会再试。" || true
+        fi
       fi
     fi
   fi
   rm -rf "$WORKDIR"
 }
+
+on_signal() {
+  INTERRUPTED=1
+  exit 130
+}
+trap on_signal INT TERM HUP
 trap cleanup EXIT
 
 stop_pipeline() {
@@ -180,7 +204,7 @@ if [[ "$action" == "skip" ]]; then
 fi
 
 merge_pr() {
-  local strategy flag merge_rc
+  local strategy flag merge_rc sync_state
   if [[ "$MERGE" != "1" ]]; then
     agent_pipeline_comment_once pr "$PR" \
       "<!-- agent-pipeline:notice=accept-no-merge sha=${head_sha} -->" \
@@ -236,6 +260,13 @@ $(checks_block)"
   agent_pipeline_state_put "$STATE_FILE" last_reviewed_sha "$head_sha"
   agent_pipeline_state_put "$STATE_FILE" owner_pid ""
   agent_pipeline_state_put "$STATE_FILE" reason ""
+  # 合并已经发生。同步失败只写日志，不让这次运行变成崩溃。
+  sync_state=$(agent_pipeline_sync_local_branch "$AGENT_PIPELINE_MAIN_ROOT" "$base_ref" || true)
+  case "$sync_state" in
+    updated) agent_pipeline_log "主工作区 ${base_ref} 已 fast-forward 到 origin/${base_ref}" ;;
+    current) ;;
+    *) agent_pipeline_log "主工作区没有自动更新（${sync_state}）。需要时手动 git pull" ;;
+  esac
   agent_pipeline_log "PR #$PR 已合并，issue #$ISSUE 关闭流程已走完"
 }
 

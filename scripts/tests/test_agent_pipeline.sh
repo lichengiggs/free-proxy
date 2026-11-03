@@ -461,6 +461,82 @@ else
   unset AGENT_PIPELINE_MAIN_ROOT
 fi
 
+# 中断后下一轮用什么状态重入。分支还在时走 --fix，否则当成全新实现。
+assert_eq "中断时分支还在，回到 needs_fix" "$(agent_pipeline_interrupt_state 1)" "needs_fix"
+assert_eq "中断时分支没建好，回到全新状态" "$(agent_pipeline_interrupt_state 0)" ""
+
+# 合并后主工作区同步。用本地裸仓库当 origin，不访问网络。
+sync_dir=$(mktemp -d "$TMP/sync.XXXXXX")
+sync_git() { git -C "$1" -c user.email=pipeline@example.com -c user.name=pipeline -c commit.gpgsign=false "${@:2}"; }
+git init -q --bare "$sync_dir/origin.git"
+git init -q -b main "$sync_dir/dev"
+printf 'one\n' > "$sync_dir/dev/file"
+sync_git "$sync_dir/dev" add file
+sync_git "$sync_dir/dev" commit -qm init
+git -C "$sync_dir/dev" remote add origin "$sync_dir/origin.git"
+git -C "$sync_dir/dev" push -q -u origin main
+git clone -q "$sync_dir/origin.git" "$sync_dir/local"
+printf 'two\n' >> "$sync_dir/dev/file"
+sync_git "$sync_dir/dev" commit -qam second
+git -C "$sync_dir/dev" push -q origin main
+assert_eq "主工作区能 fast-forward" "$(agent_pipeline_sync_local_branch "$sync_dir/local" main)" "updated"
+assert_eq "已经最新时报告 current" "$(agent_pipeline_sync_local_branch "$sync_dir/local" main)" "current"
+printf 'scratch\n' > "$sync_dir/local/untracked.txt"
+assert_eq "未跟踪文件不挡同步" "$(agent_pipeline_sync_local_branch "$sync_dir/local" main)" "current"
+printf 'edit\n' >> "$sync_dir/local/file"
+assert_eq "跟踪文件有改动时不碰工作区" "$(agent_pipeline_sync_local_branch "$sync_dir/local" main)" "dirty"
+sync_git "$sync_dir/local" checkout -- file
+sync_git "$sync_dir/local" checkout -q -b feature
+assert_eq "不在 base 分支时不切换" "$(agent_pipeline_sync_local_branch "$sync_dir/local" main)" "other-branch"
+sync_git "$sync_dir/local" checkout -q main
+printf 'local\n' >> "$sync_dir/local/file"
+sync_git "$sync_dir/local" commit -qam local-only
+printf 'three\n' >> "$sync_dir/dev/file"
+sync_git "$sync_dir/dev" commit -qam third
+git -C "$sync_dir/dev" push -q origin main
+assert_eq "本地有分叉时不强行合并" "$(agent_pipeline_sync_local_branch "$sync_dir/local" main)" "diverged"
+
+# 单次 gh 失败不该终结轮询。假 gh 只应答脚本要的几种调用，全程不访问 GitHub。
+cat > "$TMP/bin/gh" <<'EOF'
+#!/usr/bin/env bash
+case "${1:-} ${2:-}" in
+  "label list") printf 'ready\n' ;;
+  "issue list") printf '%s\n' "${FAKE_GH_ISSUES:-}" ;;
+  "issue view")
+    if [[ "${FAKE_GH_FAIL:-}" == "issue view" ]]; then
+      printf 'simulated failure\n' >&2
+      exit 1
+    fi
+    printf '## Goal\n\nx\n'
+    ;;
+  "pr list")
+    if [[ "${FAKE_GH_FAIL:-}" == "pr list" ]]; then
+      printf 'simulated failure\n' >&2
+      exit 1
+    fi
+    printf '[]\n'
+    ;;
+  *) exit 0 ;;
+esac
+EOF
+chmod +x "$TMP/bin/gh"
+
+poll_rc() {
+  local fail="$1" issues="$2" rc
+  set +e
+  ( PATH="$TMP/bin:$PATH" \
+    AGENT_PIPELINE_STATE_DIR="$TMP/poll-state" \
+    AGENT_PIPELINE_DRY_RUN=1 \
+    FAKE_GH_FAIL="$fail" \
+    FAKE_GH_ISSUES="$issues" \
+    "$ROOT/scripts/agent-poll.sh" --once --dry-run >"$TMP/poll.out" 2>&1 )
+  rc=$?
+  set -e
+  printf '%s' "$rc"
+}
+assert_eq "PR 列表拉取失败不终结轮询" "$(poll_rc 'pr list' '')" "0"
+assert_eq "Issue 正文拉取失败不终结轮询" "$(poll_rc 'issue view' '3')" "0"
+
 for script in agent-implement.sh agent-review.sh agent-poll.sh agent-night-review.sh; do
   bash -n "$ROOT/scripts/$script"
   "$ROOT/scripts/$script" --help >/dev/null

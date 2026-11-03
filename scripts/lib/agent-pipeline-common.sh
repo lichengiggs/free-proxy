@@ -610,6 +610,18 @@ agent_pipeline_inflight() {
   esac
 }
 
+# 被 SIGINT/SIGTERM/SIGHUP 打断后，下一轮用什么状态重入。
+# branch_exists 为 1 表示分支已经建好，下一轮走 --fix 复用；否则当成全新实现。
+# 输出空行表示清空 status。
+agent_pipeline_interrupt_state() {
+  local branch_exists="${1:-0}"
+  if [[ "$branch_exists" == "1" ]]; then
+    printf '%s\n' needs_fix
+  else
+    printf '%s\n' ""
+  fi
+}
+
 # accept | reject | fix | reject_exhausted | invalid
 agent_pipeline_apply_verdict() {
   local verdict="$1" rounds="$2" max_rounds="$3"
@@ -1008,6 +1020,41 @@ agent_pipeline_branch_exists_local() {
 
 agent_pipeline_branch_exists_remote() {
   git -C "$AGENT_PIPELINE_MAIN_ROOT" ls-remote --exit-code --heads origin "$1" >/dev/null 2>&1
+}
+
+# 合并后把主工作区的 base 分支同步到 origin/base。
+# 只做 fast-forward：不切换分支、不 stash、不产生合并提交。
+# 输出一个词：updated | current | dirty | other-branch | detached | diverged | fetch-failed。
+# 除 updated 和 current 外都返回 1，调用方按“跳过并写日志”处理。
+agent_pipeline_sync_local_branch() {
+  local repo="$1" branch="$2" current
+  if ! git -C "$repo" fetch --quiet origin "$branch" 2>/dev/null; then
+    printf '%s\n' fetch-failed
+    return 1
+  fi
+  current=$(git -C "$repo" symbolic-ref --quiet --short HEAD || true)
+  if [[ -z "$current" ]]; then
+    printf '%s\n' detached
+    return 1
+  fi
+  if [[ "$current" != "$branch" ]]; then
+    printf '%s\n' other-branch
+    return 1
+  fi
+  if [[ -n "$(git -C "$repo" status --porcelain --untracked-files=no)" ]]; then
+    printf '%s\n' dirty
+    return 1
+  fi
+  if git -C "$repo" merge-base --is-ancestor "origin/${branch}" HEAD 2>/dev/null; then
+    printf '%s\n' current
+    return 0
+  fi
+  if ! git -C "$repo" merge --ff-only --quiet "origin/${branch}" >/dev/null 2>&1; then
+    printf '%s\n' diverged
+    return 1
+  fi
+  printf '%s\n' updated
+  return 0
 }
 
 agent_pipeline_prepare_new_worktree() {

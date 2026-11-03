@@ -114,6 +114,7 @@ GitHub checks 还在跑时，后续轮询继续等（默认 10 轮）。head SHA
 | ACCEPT 且 checks 全绿，或没有 GitHub checks | squash 合并 | 不适用 |
 | agent 非 0 退出、超时、或没有裁决 | 评论，停止 | 否 |
 | 实现或审查进程中途挂了 | 评论，停止（`crashed`） | 否 |
+| Ctrl-C、关终端或外部 kill | 评论，状态退回可重入（实现：分支在就 `needs_fix`，否则全新；审查：`pr_open`） | 下一轮自动接着做 |
 | 已有别的 PR 用 Fixes/Closes 关联了这个 Issue，且不是本流水线的 PR | 评论，停止 | 否 |
 
 流水线 PR 的身份是正文里的标记 `<!-- agent-pipeline:issue=N -->`。同时会写 `Fixes #N`，合并后由 GitHub 关闭 Issue。
@@ -260,6 +261,8 @@ gh pr merge <pr> --squash --delete-branch --match-head-commit <审查过的 sha>
 ```
 
 `--match-head-commit` 用来拒绝合并审查者没看过的 SHA。策略用 `AGENT_PIPELINE_MERGE_STRATEGY` 改。
+
+合并成功后，如果主工作区正停在 PR 的 base 分支、且没有已暂存或未暂存的文件改动，脚本会对它做一次 `git fetch` + `git merge --ff-only`，把远程的合并结果同步到本地。停在别的分支、处于 detached、工作区有改动或本地有分叉时，只写一行日志：不切换分支、不 stash、不产生合并提交。未跟踪文件不挡同步。
 
 ## 夜审和错题本
 
