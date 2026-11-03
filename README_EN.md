@@ -73,7 +73,7 @@ Save any provider key with free quota, then use `free-proxy/auto`.
 | Gemini | `gemini-3.1-flash-lite-preview` | backup option | stable free tier fallback |
 | Mistral | `mistral-large-latest` | stable backup | strong fallback quality |
 | NVIDIA NIM | `meta/llama-3.1-70b-instruct` | extra option | this is the current built-in recommendation |
-| Cloudflare Workers AI | `@cf/meta/llama-3.1-8b-instruct` | free quota | requires both an API Token and an Account ID. 10,000 Neurons per day, reset at 00:00 UTC |
+| Cloudflare Workers AI | `@cf/mistralai/mistral-small-3.1-24b-instruct` | free quota | requires both an API Token and an Account ID. 10,000 Neurons per day, reset at 00:00 UTC |
 | AMD Token Factory | `DeepSeek-V4-Flash` | extra option | supplementary choice in the free quota |
 
 If you only remember one rule:

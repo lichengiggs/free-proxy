@@ -1569,7 +1569,7 @@ class CooldownRelayTests(unittest.TestCase):
             '@cf/deepseek-ai/deepseek-v4.1-flash-1017',
             '@cf/deepseek-ai/deepseek-v4-pro-0813',
         ]
-        hint = '@cf/meta/llama-3.1-8b-instruct'
+        hint = '@cf/mistralai/mistral-small-3.1-24b-instruct'
         calls: list[str] = []
 
         def factory(provider: str):
@@ -1593,7 +1593,7 @@ class CooldownRelayTests(unittest.TestCase):
         self.assertEqual(calls, [hint])
         self.assertTrue(all(model not in paid for model in calls))
 
-    def test_free_proxy_auto_uses_llama_hint_when_cloudflare_list_fails(self) -> None:
+    def test_free_proxy_auto_uses_hint_when_cloudflare_list_fails(self) -> None:
         calls: list[str] = []
 
         def factory(provider: str):
@@ -1613,4 +1613,4 @@ class CooldownRelayTests(unittest.TestCase):
         relay, _memory, _hashes = self._relay(factory, ['cloudflare'])
         response = relay.handle_chat(_chat_request())
         self.assertEqual(response.status, 200)
-        self.assertEqual(calls, ['@cf/meta/llama-3.1-8b-instruct'])
+        self.assertEqual(calls, ['@cf/mistralai/mistral-small-3.1-24b-instruct'])

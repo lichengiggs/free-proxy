@@ -78,7 +78,7 @@ PROVIDERS: tuple[ProviderMeta, ...] = (
         'https://api.cloudflare.com/client/v4/accounts/{account_id}/ai/v1',
         'CLOUDFLARE_API_KEY',
         'openai',
-        model_hints=('@cf/meta/llama-3.1-8b-instruct',),
+        model_hints=('@cf/mistralai/mistral-small-3.1-24b-instruct',),
         account_id_env='CLOUDFLARE_ACCOUNT_ID',
     ),
     ProviderMeta(

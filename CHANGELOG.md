@@ -24,3 +24,4 @@
 - reject legacy `coding` runtime requests with explicit `model_deprecated` instead of silently falling back
 - wrap `/v1/chat/completions` stream responses from non-streaming upstream JSON into OpenAI SSE
 - document local proxy interference during localhost SSE verification
+- Cloudflare 的推荐模型改为 `@cf/mistralai/mistral-small-3.1-24b-instruct`，上游 `errors[].message` 会显示出来

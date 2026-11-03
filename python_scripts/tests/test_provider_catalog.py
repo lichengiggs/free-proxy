@@ -224,7 +224,7 @@ class ProviderCatalogTests(unittest.TestCase):
             'gemini': ('gemini-3.1-flash-lite-preview',),
             'mistral': ('mistral-large-latest',),
             'nvidia': ('meta/llama-3.1-70b-instruct',),
-            'cloudflare': ('@cf/meta/llama-3.1-8b-instruct',),
+            'cloudflare': ('@cf/mistralai/mistral-small-3.1-24b-instruct',),
             'amd': ('DeepSeek-V4-Flash',),
         }
         self.assertEqual({item.name: item.model_hints for item in PROVIDERS}, expected)
@@ -259,7 +259,7 @@ class ProviderCatalogTests(unittest.TestCase):
             self.assertEqual([item.name for item in PROVIDERS][-2:], ['cloudflare', 'amd'])
             provider = get_provider('cloudflare')
             self.assertEqual(provider.name, 'cloudflare')
-            self.assertEqual(provider.model_hints, ('@cf/meta/llama-3.1-8b-instruct',))
+            self.assertEqual(provider.model_hints, ('@cf/mistralai/mistral-small-3.1-24b-instruct',))
             self.assertEqual(
                 provider.base_url,
                 f'https://api.cloudflare.com/client/v4/accounts/{_CF_ACCOUNT}/ai/v1',
@@ -287,7 +287,7 @@ class ProviderCatalogTests(unittest.TestCase):
                 with _env({**_CF_ENV_CLEAR, 'CLOUDFLARE_API_KEY': 'cf-token-example-1234', 'CLOUDFLARE_ACCOUNT_ID': account_id}):
                     provider = get_provider('cloudflare')
                     self.assertEqual(provider.name, 'cloudflare')
-                    self.assertEqual(provider.model_hints, ('@cf/meta/llama-3.1-8b-instruct',))
+                    self.assertEqual(provider.model_hints, ('@cf/mistralai/mistral-small-3.1-24b-instruct',))
                     self.assertEqual(provider.base_url, 'https://api.cloudflare.com/client/v4/accounts/{account_id}/ai/v1')
                     if account_id:
                         self.assertNotIn(account_id, provider.base_url)
@@ -303,7 +303,7 @@ class ProviderCatalogTests(unittest.TestCase):
             self.assertEqual(provider.base_url, 'http://127.0.0.1:9')
             self.assertNotIn(_CF_ACCOUNT, provider.base_url)
             self.assertNotIn('api.cloudflare.com', provider.base_url)
-            self.assertEqual(provider.model_hints, ('@cf/meta/llama-3.1-8b-instruct',))
+            self.assertEqual(provider.model_hints, ('@cf/mistralai/mistral-small-3.1-24b-instruct',))
             self.assertNotIn('cloudflare', configured_provider_names({'CLOUDFLARE_API_KEY': 'cf-token-example-1234'}))
 
     def test_readme_and_changelog_say_cloudflare_needs_token_and_account_id(self) -> None:
@@ -311,7 +311,7 @@ class ProviderCatalogTests(unittest.TestCase):
         for name in ('README.md', 'README_EN.md'):
             text = (root / name).read_text(encoding='utf-8')
             self.assertIn('Cloudflare Workers AI', text)
-            self.assertIn('@cf/meta/llama-3.1-8b-instruct', text)
+            self.assertIn('@cf/mistralai/mistral-small-3.1-24b-instruct', text)
             self.assertIn('API Token', text)
             self.assertIn('Account ID', text)
             self.assertIn('10,000', text)
@@ -319,6 +319,7 @@ class ProviderCatalogTests(unittest.TestCase):
             self.assertIn('http://127.0.0.1:8765/v1', text)
         changelog = (root / 'CHANGELOG.md').read_text(encoding='utf-8')
         self.assertIn('Cloudflare Workers AI 需要 API Token 和 Account ID', changelog)
+        self.assertIn('@cf/mistralai/mistral-small-3.1-24b-instruct', changelog)
         research = (root / 'docs' / 'research.md').read_text(encoding='utf-8')
         self.assertIn('CLOUDFLARE_ACCOUNT_ID', research)
         self.assertIn('合法 Account ID', research)

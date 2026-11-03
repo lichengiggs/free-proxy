@@ -73,7 +73,7 @@ uv run free-proxy serve
 | Gemini | `gemini-3.1-flash-lite-preview` | 免费层回退 | 免费层稳定，适合回退 |
 | Mistral | `mistral-large-latest` | 稳定后备 | 质量稳，适合补位 |
 | NVIDIA NIM | `meta/llama-3.1-70b-instruct` | 补充选择 | 当前内置推荐是这一条 |
-| Cloudflare Workers AI | `@cf/meta/llama-3.1-8b-instruct` | 免费额度 | 需要同时填写 API Token 和 Account ID。每天 10,000 Neurons，00:00 UTC 重置 |
+| Cloudflare Workers AI | `@cf/mistralai/mistral-small-3.1-24b-instruct` | 免费额度 | 需要同时填写 API Token 和 Account ID。每天 10,000 Neurons，00:00 UTC 重置 |
 | AMD Token Factory | `DeepSeek-V4-Flash` | 补充选择 | 免费额度里的补充选择 |
 
 如果你只记一条：
