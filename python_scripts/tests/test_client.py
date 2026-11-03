@@ -812,14 +812,30 @@ class ClientTests(unittest.TestCase):
         _method, _url, headers, _body, _timeout = transport.requests[0]
         self.assertEqual(headers['Authorization'], 'Bearer cf-token-example-1234')
 
-    def test_cloudflare_model_list_failure_falls_back_to_llama_hint(self) -> None:
+    def test_cloudflare_model_list_failure_falls_back_to_default_hint(self) -> None:
         account_id = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
         provider = self._cloudflare_provider(account_id)
+        hint = '@cf/mistralai/mistral-small-3.1-24b-instruct'
         transport = FakeTransport({
             ('GET', f'{provider.base_url}/models'): (404, {}, b'not found'),
         })
         adapter = ProviderAdapter(provider=provider, api_key='cf-token-example-1234', transport=transport)
-        self.assertEqual(adapter.list_models(), ['@cf/meta/llama-3.1-8b-instruct'])
+        self.assertEqual(adapter.list_models(), [hint])
+
+        method_not_allowed = FakeTransport({
+            ('GET', f'{provider.base_url}/models'): (
+                405,
+                {},
+                json.dumps({
+                    'success': False,
+                    'errors': [{'code': 7001, 'message': 'GET not supported for requested URI'}],
+                    'messages': [],
+                    'result': None,
+                }).encode(),
+            ),
+        })
+        method_adapter = ProviderAdapter(provider=provider, api_key='cf-token-example-1234', transport=method_not_allowed)
+        self.assertEqual(method_adapter.list_models(), [hint])
 
         filtered = FakeTransport({
             ('GET', f'{provider.base_url}/models'): (
@@ -829,7 +845,45 @@ class ClientTests(unittest.TestCase):
             ),
         })
         filtered_adapter = ProviderAdapter(provider=provider, api_key='cf-token-example-1234', transport=filtered)
-        self.assertEqual(filtered_adapter.list_models(), ['@cf/meta/llama-3.1-8b-instruct'])
+        self.assertEqual(filtered_adapter.list_models(), [hint])
+
+    def test_cloudflare_chat_error_surfaces_first_upstream_errors_message(self) -> None:
+        account_id = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
+        provider = self._cloudflare_provider(account_id)
+        transport = FakeTransport({
+            ('POST', f'{provider.base_url}/chat/completions'): (
+                410,
+                {},
+                json.dumps({
+                    'success': False,
+                    'errors': [{'code': 5028, 'message': 'AiError: Model has been deprecated'}],
+                    'messages': [],
+                    'result': None,
+                }).encode(),
+            ),
+        })
+        adapter = ProviderAdapter(provider=provider, api_key='cf-token-example-1234', transport=transport)
+        with self.assertRaises(ProviderError) as caught:
+            adapter.chat_text('@cf/mistralai/mistral-small-3.1-24b-instruct', 'ok')
+        self.assertIn('Model has been deprecated', str(caught.exception))
+        self.assertNotIn('连通失败', str(caught.exception))
+
+    def test_top_level_error_message_wins_over_errors_list(self) -> None:
+        provider = get_provider('groq')
+        transport = FakeTransport({
+            ('POST', 'https://api.groq.com/openai/v1/chat/completions'): (
+                400,
+                {},
+                json.dumps({
+                    'error': {'message': 'top-level error'},
+                    'errors': [{'message': 'nested errors message'}],
+                }).encode(),
+            ),
+        })
+        adapter = ProviderAdapter(provider=provider, api_key='x', transport=transport)
+        with self.assertRaises(ProviderError) as caught:
+            adapter.chat_text('llama-3.1-8b-instant', 'ok')
+        self.assertEqual(str(caught.exception), 'top-level error')
 
     def test_invalid_cloudflare_account_id_does_not_call_cloudflare(self) -> None:
         provider = self._cloudflare_provider()
@@ -841,5 +895,5 @@ class ClientTests(unittest.TestCase):
             self.assertIn('api.cloudflare.com', str(caught.exception))
             client_cls.assert_not_called()
             with self.assertRaises(ProviderError):
-                adapter.chat_text('@cf/meta/llama-3.1-8b-instruct', 'ok')
+                adapter.chat_text('@cf/mistralai/mistral-small-3.1-24b-instruct', 'ok')
             client_cls.assert_not_called()

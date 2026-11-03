@@ -349,7 +349,7 @@ class ProviderRoutingTests(unittest.TestCase):
             '@cf/deepseek-ai/deepseek-v4.1-flash-1017',
             '@cf/deepseek-ai/deepseek-v4-pro-0813',
         ]
-        hint = '@cf/meta/llama-3.1-8b-instruct'
+        hint = '@cf/mistralai/mistral-small-3.1-24b-instruct'
         self.assertEqual(select_listed_model('cloudflare', [paid[0], hint, paid[1]]), hint)
         self.assertIsNone(select_listed_model('cloudflare', paid))
 
@@ -378,7 +378,7 @@ class ProviderRoutingTests(unittest.TestCase):
         items = build_auto_candidates(
             requested_model=None,
             configured=['cloudflare'],
-            health={'cloudflare/@cf/meta/llama-3.1-8b-instruct': {'ok': True, 'checked_at': 50}},
+            health={'cloudflare/@cf/mistralai/mistral-small-3.1-24b-instruct': {'ok': True, 'checked_at': 50}},
             now_ts=80,
             ttl_seconds=600,
             listed_models={'cloudflare': ['@cf/meta/llama-3.2-3b-instruct']},
@@ -386,7 +386,7 @@ class ProviderRoutingTests(unittest.TestCase):
         self.assertEqual(
             [(item.provider, item.model) for item in items],
             [
-                ('cloudflare', '@cf/meta/llama-3.1-8b-instruct'),
+                ('cloudflare', '@cf/mistralai/mistral-small-3.1-24b-instruct'),
                 ('cloudflare', '@cf/meta/llama-3.2-3b-instruct'),
             ],
         )

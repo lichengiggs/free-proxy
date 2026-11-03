@@ -588,6 +588,14 @@ class ProviderAdapter:
                     nested = value.get('message')
                     if isinstance(nested, str) and nested.strip():
                         return nested
+            errors = data.get('errors')
+            if isinstance(errors, list):
+                for item in errors:
+                    if not isinstance(item, dict):
+                        continue
+                    nested = item.get('message')
+                    if isinstance(nested, str) and nested.strip():
+                        return nested
         return fallback
 
     def _raise_http_error(self, status: int, data: object, fallback: str) -> None:
